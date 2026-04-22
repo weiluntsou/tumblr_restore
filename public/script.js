@@ -244,7 +244,7 @@ function renderMedia(items) {
         previewBtn.innerHTML = '🔍';
         previewBtn.onclick = (e) => {
             e.stopPropagation();
-            openViewer(item);
+            openViewer(item, currentMediaItems, index);
         };
         div.appendChild(previewBtn);
 
@@ -265,17 +265,39 @@ function renderMedia(items) {
     });
 }
 
-function openViewer(item) {
+// --- Viewer with random-next (tap to shuffle) ---
+let viewerItemsList = [];
+let viewerCurrentIndex = -1;
+const viewerCounter = document.getElementById('viewerCounter');
+const shuffleBtn = document.getElementById('shuffleBtn');
+
+function openViewer(item, list, index) {
+    // Store the list context for random navigation
+    if (list && list.length > 0) {
+        // Filter to only image/video for shuffle (skip audio)
+        viewerItemsList = list;
+        viewerCurrentIndex = (typeof index === 'number') ? index : list.indexOf(item);
+    } else {
+        viewerItemsList = [item];
+        viewerCurrentIndex = 0;
+    }
+    loadViewerItem(item);
+    viewerModal.classList.remove('hidden');
+}
+
+function loadViewerItem(item) {
     viewport.innerHTML = '';
     if (item.type === 'image') {
         const img = document.createElement('img');
         img.src = item.url;
+        img.classList.add('viewer-media');
         viewport.appendChild(img);
     } else if (item.type === 'video') {
         const video = document.createElement('video');
         video.src = item.url;
         video.controls = true;
         video.autoplay = true;
+        video.classList.add('viewer-media');
         viewport.appendChild(video);
     } else if (item.type === 'audio') {
         const audio = document.createElement('audio');
@@ -284,18 +306,86 @@ function openViewer(item) {
         audio.autoplay = true;
         viewport.appendChild(audio);
     }
-    viewerModal.classList.remove('hidden');
+    updateViewerCounter();
 }
 
-closeBtn.onclick = () => {
+function updateViewerCounter() {
+    if (viewerCounter) {
+        if (viewerItemsList.length > 1) {
+            viewerCounter.innerText = `${viewerCurrentIndex + 1} / ${viewerItemsList.length}`;
+            viewerCounter.classList.remove('hidden');
+        } else {
+            viewerCounter.classList.add('hidden');
+        }
+    }
+    // Show/hide shuffle button
+    if (shuffleBtn) {
+        shuffleBtn.style.display = viewerItemsList.length > 1 ? '' : 'none';
+    }
+}
+
+function viewerRandomNext() {
+    if (viewerItemsList.length <= 1) return;
+    let nextIndex;
+    do {
+        nextIndex = Math.floor(Math.random() * viewerItemsList.length);
+    } while (nextIndex === viewerCurrentIndex);
+    viewerCurrentIndex = nextIndex;
+    const nextItem = viewerItemsList[nextIndex];
+    // Update currentViewerFile if it's a history item
+    if (nextItem.name) {
+        currentViewerFile = nextItem.name;
+    }
+    // Add transition animation
+    viewport.classList.add('viewer-transition');
+    setTimeout(() => {
+        loadViewerItem(nextItem);
+        viewport.classList.remove('viewer-transition');
+    }, 150);
+}
+
+// Tap/click on viewport to shuffle to random next
+viewport.addEventListener('click', (e) => {
+    // Don't trigger on video controls or audio elements
+    const tag = e.target.tagName.toLowerCase();
+    if (tag === 'video' || tag === 'audio') return;
+    // Only trigger on images or the viewport itself
+    if (tag === 'img' || e.target === viewport) {
+        viewerRandomNext();
+    }
+});
+
+// Shuffle button click
+if (shuffleBtn) {
+    shuffleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        viewerRandomNext();
+    });
+}
+
+// Keyboard support: press space or right arrow to shuffle
+document.addEventListener('keydown', (e) => {
+    if (viewerModal.classList.contains('hidden')) return;
+    if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault();
+        viewerRandomNext();
+    } else if (e.key === 'Escape') {
+        closeViewer();
+    }
+});
+
+function closeViewer() {
     viewerModal.classList.add('hidden');
     viewport.innerHTML = '';
-};
+    viewerItemsList = [];
+    viewerCurrentIndex = -1;
+}
+
+closeBtn.onclick = () => closeViewer();
 
 window.onclick = (event) => {
     if (event.target == viewerModal) {
-        viewerModal.classList.add('hidden');
-        viewport.innerHTML = '';
+        closeViewer();
     }
 };
 
@@ -427,7 +517,9 @@ function renderHistory(files) {
 
         div.onclick = () => {
             currentViewerFile = file.name;
-            openViewer({ url: file.url, type: file.type });
+            const viewableFiles = files.map(f => ({ url: f.url, type: f.type, name: f.name }));
+            const idx = files.indexOf(file);
+            openViewer({ url: file.url, type: file.type, name: file.name }, viewableFiles, idx);
         };
         historyGrid.appendChild(div);
     });

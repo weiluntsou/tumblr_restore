@@ -80,10 +80,13 @@
             <div id="viewerModal" class="modal hidden">
                 <div class="modal-content glass">
                     <div class="modal-controls">
+                        <span id="viewerCounter" class="viewer-counter hidden">1 / 1</span>
+                        <button id="shuffleBtn" class="icon-btn shuffle-btn" title="隨機下一張 (點擊圖片或按→)">🔀</button>
                         <button id="deleteViewerFile" class="icon-btn danger-btn" title="刪除檔案">🗑️</button>
                         <span class="close-btn">&times;</span>
                     </div>
                     <div id="viewport"></div>
+                    <p class="viewer-hint">💡 點擊圖片隨機跳下一張</p>
                 </div>
             </div>
         </main>
