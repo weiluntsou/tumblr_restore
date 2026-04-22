@@ -493,3 +493,125 @@ footer {
 
 .status-success { color: #4ade80; }
 .status-error { color: #f87171; }
+
+/* Paste hint */
+.paste-hint {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 12px;
+    opacity: 0.7;
+}
+
+/* Paste action button - more prominent */
+.paste-action-btn {
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 20px !important;
+    font-size: 0.95rem !important;
+}
+
+/* Mobile-responsive input group */
+@media (max-width: 600px) {
+    .container {
+        padding: 20px 12px;
+    }
+
+    h1 {
+        font-size: 2rem;
+    }
+
+    header {
+        margin-bottom: 30px;
+    }
+
+    header p {
+        font-size: 0.95rem;
+    }
+
+    .tabs {
+        gap: 6px;
+    }
+
+    .tab-btn {
+        padding: 8px 16px;
+        font-size: 0.85rem;
+    }
+
+    .card {
+        padding: 20px 16px;
+    }
+
+    .input-group {
+        flex-wrap: wrap;
+    }
+
+    .input-group input[type="url"] {
+        width: 100%;
+        flex: 1 1 100%;
+        font-size: 16px; /* Prevent iOS zoom on focus */
+        padding: 14px 16px;
+    }
+
+    .input-group .paste-action-btn {
+        flex: 1;
+        justify-content: center;
+        padding: 14px 0 !important;
+        font-size: 1rem !important;
+        background: rgba(74, 222, 128, 0.15);
+        border-color: rgba(74, 222, 128, 0.3);
+        color: var(--primary);
+    }
+
+    #fetchBtn {
+        flex: 1;
+        padding: 14px 0;
+        font-size: 1rem;
+    }
+
+    .media-grid {
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 12px;
+    }
+
+    /* On touch devices, always show preview & delete buttons */
+    .media-item .preview-btn {
+        opacity: 1;
+    }
+
+    .media-item .item-delete-btn {
+        opacity: 1;
+    }
+
+    /* Modal adjustments for mobile */
+    .modal-content {
+        max-width: 95vw;
+        padding: 12px;
+    }
+
+    #viewport img, #viewport video {
+        max-height: 70vh;
+    }
+
+    .primary-btn {
+        padding: 14px 24px;
+        font-size: 1rem;
+        width: 100%;
+    }
+
+    .action-bar {
+        width: 100%;
+    }
+
+    .paste-hint {
+        text-align: center;
+        font-size: 0.85rem;
+    }
+
+    .history-header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+    }
+}

@@ -27,10 +27,11 @@
             <section id="downloaderTab" class="tab-content">
                 <div class="card glass">
                     <div class="input-group">
-                        <input type="text" id="urlInput" placeholder="在此貼上 Tumblr 文章網址..." autocomplete="off">
-                        <button id="pasteBtn" class="icon-btn" title="從剪貼簿貼上">📋</button>
-                        <button id="fetchBtn">解析網址</button>
+                        <input type="url" id="urlInput" placeholder="在此貼上 Tumblr 文章網址..." autocomplete="off" inputmode="url">
+                        <button id="pasteBtn" class="icon-btn paste-action-btn" title="從剪貼簿貼上">📋 貼上</button>
+                        <button id="fetchBtn">解析</button>
                     </div>
+                    <p class="paste-hint">💡 貼上連結後將自動開始解析</p>
                     <div id="status" class="status-msg"></div>
                     <div id="tagContainer" class="tag-list hidden"></div>
                 </div>

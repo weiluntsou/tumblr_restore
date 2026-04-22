@@ -18,19 +18,88 @@ const closeBtn = document.querySelector('.close-btn');
 let currentMediaItems = [];
 let selectedIndices = new Set();
 
-// Clipboard logic
+// Flag to prevent double-triggering fetch from paste + input events
+let pasteAutoFetchTriggered = false;
+
+// --- Mobile-friendly clipboard paste logic ---
 pasteBtn.addEventListener('click', async () => {
+    // Strategy 1: Modern Clipboard API (works on desktop Chrome/Firefox, some Android)
+    if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+                urlInput.value = text;
+                showStatus('已從剪貼簿貼上', 'success');
+                tryAutoFetch(text);
+                return;
+            }
+        } catch (err) {
+            // Permission denied or not supported — fall through
+            console.log('Clipboard API readText failed:', err.message);
+        }
+    }
+
+    // Strategy 2: Focus the input field and prompt user to paste manually
+    // On mobile, programmatic clipboard access is restricted.
+    // The best UX is to focus the field so the user can use the native paste action.
+    urlInput.value = '';
+    urlInput.focus();
+
+    // On iOS, we can trigger the paste menu by selecting the field
+    // Also try execCommand('paste') as a last resort (works in some older webviews)
     try {
-        const text = await navigator.clipboard.readText();
-        urlInput.value = text;
-        showStatus('已從剪貼簿貼上', 'success');
-        if (text.startsWith('http')) {
-            fetchBtn.click();
+        const didPaste = document.execCommand('paste');
+        if (didPaste && urlInput.value) {
+            showStatus('已從剪貼簿貼上', 'success');
+            tryAutoFetch(urlInput.value);
+            return;
         }
     } catch (err) {
-        showStatus('無法存取剪貼簿', 'error');
+        // execCommand('paste') not supported
     }
+
+    showStatus('請在輸入框中長按貼上連結 📲', 'info');
 });
+
+// Auto-trigger fetch when pasting into the input field directly
+urlInput.addEventListener('paste', (e) => {
+    // Use a small delay to let the browser fill in the pasted text
+    setTimeout(() => {
+        const text = urlInput.value.trim();
+        if (text && text.startsWith('http')) {
+            pasteAutoFetchTriggered = true;
+            showStatus('偵測到連結，自動解析中...', 'success');
+            fetchBtn.click();
+            // Reset the flag after a short delay
+            setTimeout(() => { pasteAutoFetchTriggered = false; }, 1000);
+        }
+    }, 100);
+});
+
+// Also listen for 'input' event to catch mobile paste that doesn't fire 'paste' event
+urlInput.addEventListener('input', debounce((e) => {
+    if (pasteAutoFetchTriggered) return;
+    const text = urlInput.value.trim();
+    // Heuristic: if a full URL appeared in one input event, it's likely a paste
+    if (text.startsWith('http') && text.includes('tumblr')) {
+        showStatus('偵測到 Tumblr 連結，自動解析中...', 'success');
+        fetchBtn.click();
+    }
+}, 500));
+
+function tryAutoFetch(text) {
+    if (text && text.trim().startsWith('http')) {
+        fetchBtn.click();
+    }
+}
+
+function debounce(fn, delay) {
+    let timer;
+    return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
 
 fetchBtn.addEventListener('click', async () => {
     const url = urlInput.value.trim();
