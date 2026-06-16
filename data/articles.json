@@ -1,4 +1,14 @@
 {
-  "articles": [],
+  "articles": [
+    {
+      "id": "art_1781578113564_yp80k",
+      "title": "Test Title",
+      "originalContent": "This is a raw article content.",
+      "reformatted": "",
+      "names": [],
+      "status": "raw",
+      "createdAt": "2026-06-16T02:48:33.564Z"
+    }
+  ],
   "paragraphs": []
 }

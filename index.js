@@ -434,6 +434,7 @@ app.post('/api/articles/reformat', async (req, res) => {
    - 「轉」：轉折、情節起伏、引入衝突或改變視角。
    - 「合」：收尾、總結、得出結論或情感昇華。
 3. **人名辨識**：在每個段落中，找出所有出現的「真實人名」或「角色名字」（如「張三」、「王五」、「John」等），若無人名則留空陣列。
+4. **繁體中文輸出**：不論輸入文章是簡體中文、英文或其他語言，輸出的文章標題、排版後全文 (reformatted) 以及段落內容 (content)，必須全部轉換為繁體中文 (Taiwanese Traditional Chinese)，並修正任何非繁體中文用語。
 
 請嚴格以 JSON 格式回傳，結構如下，不要包含任何 markdown code block (如 \`\`\`json)：
 {
@@ -498,6 +499,7 @@ app.post('/api/articles/save', async (req, res) => {
             originalContent,
             reformatted: reformatted || '',
             names: allNames,
+            status: 'analyzed',
             createdAt: new Date().toISOString()
         };
 
@@ -524,6 +526,132 @@ app.post('/api/articles/save', async (req, res) => {
 });
 
 /**
+ * API: Save raw article without analysis
+ */
+app.post('/api/articles/save-raw', async (req, res) => {
+    const { title, originalContent } = req.body;
+    if (!originalContent) {
+        return res.status(400).json({ error: '請提供文章內容' });
+    }
+
+    try {
+        const db = await loadArticlesDB();
+        const articleId = `art_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+        const newArticle = {
+            id: articleId,
+            title: title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`,
+            originalContent,
+            reformatted: '',
+            names: [],
+            status: 'raw',
+            createdAt: new Date().toISOString()
+        };
+
+        db.articles.push(newArticle);
+        await saveArticlesDB(db);
+
+        res.json({ success: true, articleId, title: newArticle.title });
+    } catch (e) {
+        console.error('Save raw article error:', e);
+        res.status(500).json({ error: '儲存文章時發生錯誤: ' + e.message });
+    }
+});
+
+/**
+ * API: Run AI analysis, segmentation, role labeling and name extraction on a raw article
+ */
+app.post('/api/articles/:id/analyze', async (req, res) => {
+    const articleId = req.params.id;
+    try {
+        const db = await loadArticlesDB();
+        const articleIndex = db.articles.findIndex(art => art.id === articleId);
+        if (articleIndex === -1) {
+            return res.status(404).json({ error: '找不到該文章' });
+        }
+
+        const article = db.articles[articleIndex];
+
+        const prompt = `你是一個專業的文章排版與分析助手。請分析以下貼入的文章，並將其處理成結構化的 JSON 格式。
+
+處理要求：
+1. **重新排版**：將整篇文章排版成易於閱讀的格式（使用 Markdown），修正錯誤的標點符號，並保留語意通順。
+2. **段落切割與角色分類**：依語意將文章切分成數個段落。對於每個段落，根據其在文章結構中的角色，將其分類為：
+   - 「起」：引導、開端、介紹背景或人物。
+   - 「承」：延續開端、展開敘事、補充細節。
+   - 「轉」：轉折、情節起伏、引入衝突或改變視角。
+   - 「合」：收尾、總結、得出結論或情感昇華。
+3. **人名辨識**：在每個段落中，找出所有出現的「真實人名」或「角色名字」（如「張三」、「王五」、「John」等），若無人名則留空陣列。
+4. **繁體中文輸出**：不論輸入文章是簡體中文、英文或其他語言，輸出的文章標題、排版後全文 (reformatted) 以及段落內容 (content)，必須全部轉換為繁體中文 (Taiwanese Traditional Chinese)，並修正任何非繁體中文用語。
+
+請嚴格以 JSON 格式回傳，結構如下，不要包含 any markdown code block (如 \`\`\`json)：
+{
+  "title": "請提供一個適合的文章標題（如果原文章無標題則自動擬定）",
+  "reformatted": "排版後的完整 Markdown 文章內容",
+  "paragraphs": [
+    {
+      "content": "此段落的文字內容（排版後）",
+      "role": "起 或 承 或 轉 或 合",
+      "names": ["段落中出現的人名列表，例如 ['張三']"]
+    }
+  ]
+}
+
+原文章內容：
+${article.originalContent}`;
+
+        const responseText = await callGemini(prompt, true);
+        
+        let cleaned = responseText;
+        if (cleaned.startsWith('```')) {
+            cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        }
+
+        const result = JSON.parse(cleaned);
+
+        // Collect all unique names in this article
+        const allNamesSet = new Set();
+        result.paragraphs.forEach(p => {
+            if (p.names && Array.isArray(p.names)) {
+                p.names.forEach(n => {
+                    const trimmed = n.trim();
+                    if (trimmed) allNamesSet.add(trimmed);
+                });
+            }
+        });
+        const allNames = Array.from(allNamesSet);
+
+        // Update database record
+        article.title = result.title || article.title;
+        article.reformatted = result.reformatted || '';
+        article.names = allNames;
+        article.status = 'analyzed';
+
+        // Clear any existing paragraphs for this article just in case
+        db.paragraphs = db.paragraphs.filter(p => p.articleId !== articleId);
+
+        // Save paragraphs
+        const newParagraphs = result.paragraphs.map((p, idx) => ({
+            id: `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`,
+            articleId,
+            content: p.content || '',
+            role: p.role || '承',
+            names: p.names || [],
+            seq: idx
+        }));
+
+        db.paragraphs.push(...newParagraphs);
+        
+        await saveArticlesDB(db);
+
+        res.json({ success: true, article, paragraphs: newParagraphs });
+    } catch (e) {
+        console.error('Analyze article error:', e);
+        res.status(500).json({ error: 'AI 分析時發生錯誤: ' + e.message });
+    }
+});
+
+/**
  * API: Get list of articles
  */
 app.get('/api/articles', async (req, res) => {
@@ -536,6 +664,7 @@ app.get('/api/articles', async (req, res) => {
                 title: art.title,
                 createdAt: art.createdAt,
                 names: art.names || [],
+                status: art.status || 'analyzed',
                 wordCount: art.reformatted ? art.reformatted.length : 0,
                 paragraphCount: artParagraphs.length
             };
@@ -687,7 +816,8 @@ app.post('/api/articles/generate', async (req, res) => {
 2. **段落合理補寫**：在原本的段落之間，補寫必要的「過渡句」或「銜接情節」，讓原本不相關的段落串接得極其自然，如同原本就是同一篇文章。
 3. **名字一致性**：確保段落中所有人物姓名保持一致，不要搞混人名。
 4. **目標字數**：整篇文章的字數目標約為 ${wordCount} 字左右。
-5. **格式**：請以 Markdown 格式輸出，只回傳排版後的最終文章內容。
+5. **繁體中文輸出**：整篇文章的內容（包括補寫的銜接段落）必須全部以繁體中文 (Taiwanese Traditional Chinese) 輸出。
+6. **格式**：請以 Markdown 格式輸出，只回傳排版後的最終文章內容。
 
 以下是隨機挑選的段落內容：
 ${reassembledText}`;

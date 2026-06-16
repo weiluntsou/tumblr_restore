@@ -666,14 +666,19 @@ function renderArticles(articles) {
             year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
         });
         
+        const isRaw = art.status === 'raw';
+        const statusBadge = isRaw ? '<span class="role-badge role-zhuan" style="margin-left: 8px; font-size: 0.75rem; padding: 2px 6px;">⚠️ 尚未分析</span>' : '';
+        const wordCountText = isRaw ? '尚未分析' : `${art.wordCount} 字`;
+        const paragraphCountText = isRaw ? '尚未分析' : `${art.paragraphCount} 個`;
+        
         card.innerHTML = `
-            <h3>${escapeHtml(art.title)}</h3>
+            <h3>${escapeHtml(art.title)} ${statusBadge}</h3>
             <div class="article-meta-info">
                 <span>📅 儲存時間: ${dateStr}</span>
-                <span>📏 總字數: ${art.wordCount} 字 | 🧩 段落數: ${art.paragraphCount} 個</span>
+                <span>📏 總字數: ${wordCountText} | 🧩 段落數: ${paragraphCountText}</span>
             </div>
             <div class="article-tags-names">
-                ${(art.names || []).map(name => `<span class="name-tag">👤 ${escapeHtml(name)}</span>`).join('')}
+                ${isRaw ? '<span style="color: var(--text-dim); font-size: 0.8rem; font-style: italic;">💡 請點擊此卡片，開啟後進行 AI 結構分析</span>' : (art.names || []).map(name => `<span class="name-tag">👤 ${escapeHtml(name)}</span>`).join('')}
             </div>
             <button class="article-delete-btn" title="刪除文章">🗑️</button>
         `;
@@ -722,56 +727,107 @@ async function openArticleDetails(articleId) {
         modalContent.className = 'modal-content glass';
         modalContent.style.cssText = 'width: 90%; max-width: 900px; height: 85vh; padding: 30px;';
         
-        const formattedDate = new Date(article.createdAt).toLocaleDateString('zh-TW');
-        
-        modalContent.innerHTML = `
-            <div class="modal-controls" style="position: absolute; top: 20px; right: 20px;">
-                <span class="close-btn" id="closeDetailBtn">&times;</span>
-            </div>
-            <div style="width: 100%; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-                <h2 style="margin-bottom: 5px; font-weight: 600;">${escapeHtml(article.title)}</h2>
-                <div style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px;">
-                    儲存日期: ${formattedDate} | 人物: ${(article.names || []).join('、') || '無'}
+        const updateModalBody = (art, paras) => {
+            const formattedDate = new Date(art.createdAt).toLocaleDateString('zh-TW');
+            const innerIsRaw = art.status === 'raw';
+            
+            modalContent.innerHTML = `
+                <div class="modal-controls" style="position: absolute; top: 20px; right: 20px;">
+                    <span class="close-btn" id="closeDetailBtn">&times;</span>
                 </div>
-                
-                <div class="preview-layout" style="flex: 1; min-height: 0; margin-top: 10px;">
-                    <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
-                        <h3 style="margin-bottom: 10px;">重新排版內容</h3>
-                        <div class="reformatted-content-view" style="flex: 1; max-height: none;">
-                            ${renderMarkdown(article.reformatted)}
-                        </div>
+                <div style="width: 100%; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
+                    <h2 style="margin-bottom: 5px; font-weight: 600;">${escapeHtml(art.title)}</h2>
+                    <div style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px;">
+                        儲存日期: ${formattedDate} | 人物: ${innerIsRaw ? '尚未分析' : (art.names || []).join('、') || '無'}
                     </div>
-                    <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
-                        <h3 style="margin-bottom: 10px;">段落細節紀錄 (${paragraphs.length})</h3>
-                        <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
-                            ${paragraphs.map((p, i) => `
-                                <div class="paragraph-analysis-card">
-                                    <div class="paragraph-analysis-header">
-                                        <span>段落 #${i+1}</span>
-                                        <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
-                                    </div>
-                                    <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
-                                    <div style="font-size: 0.75rem; color: var(--text-dim);">
-                                        👤 人物: ${(p.names || []).join('、') || '無'}
-                                    </div>
+                    
+                    <div class="preview-layout" style="flex: 1; min-height: 0; margin-top: 10px;">
+                        <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
+                            <h3 style="margin-bottom: 10px;">排版內容</h3>
+                            <div class="reformatted-content-view" style="flex: 1; max-height: none; white-space: ${innerIsRaw ? 'pre-wrap' : 'normal'};">
+                                ${innerIsRaw ? escapeHtml(art.originalContent) : renderMarkdown(art.reformatted)}
+                            </div>
+                        </div>
+                        <div class="preview-column" id="modalRightColumn" style="display: flex; flex-direction: column; height: 100%;">
+                            ${innerIsRaw ? `
+                                <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: rgba(255,255,255,0.01); border: 1px dashed var(--glass-border); border-radius: 12px; padding: 20px;">
+                                    <p style="font-size: 1.4rem; margin-bottom: 12px; font-weight: bold; color: #fbbf24;">🤖 尚未進行 AI 段落分析</p>
+                                    <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 25px; line-height: 1.6; max-width: 300px;">
+                                        點擊下方按鈕將調用 Gemini 模型，為文章自動重新排版、切割段落（標記起承轉合角色）並提取所含人名。
+                                    </p>
+                                    <button id="libStartAnalysisBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); padding: 12px 30px; font-size: 0.95rem;">開始 AI 分析與排版</button>
+                                    <div id="libAnalysisModalStatus" class="status-msg" style="margin-top: 15px;"></div>
                                 </div>
-                            `).join('')}
+                            ` : `
+                                <h3 style="margin-bottom: 10px;">段落細節紀錄 (${paras.length})</h3>
+                                <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
+                                    ${paras.map((p, i) => `
+                                        <div class="paragraph-analysis-card">
+                                            <div class="paragraph-analysis-header">
+                                                <span>段落 #${i+1}</span>
+                                                <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
+                                            </div>
+                                            <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
+                                            <div style="font-size: 0.75rem; color: var(--text-dim);">
+                                                👤 人物: ${(p.names || []).join('、') || '無'}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            `}
                         </div>
                     </div>
                 </div>
-            </div>
-        `;
+            `;
+            
+            // Re-bind close handler
+            const closeBtn = modalContent.querySelector('#closeDetailBtn');
+            closeBtn.onclick = closeModal;
+            
+            // Re-bind analyze handler if raw
+            if (innerIsRaw) {
+                const analyzeBtn = modalContent.querySelector('#libStartAnalysisBtn');
+                const statusMsg = modalContent.querySelector('#libAnalysisModalStatus');
+                
+                analyzeBtn.onclick = async () => {
+                    analyzeBtn.disabled = true;
+                    statusMsg.innerText = '正在執行 AI 分析中，請稍後... ⏳';
+                    statusMsg.className = 'status-msg info';
+                    
+                    try {
+                        const res = await fetch(`/api/articles/${art.id}/analyze`, {
+                            method: 'POST'
+                        });
+                        const resData = await res.json();
+                        
+                        if (resData.error) {
+                            statusMsg.innerText = '分析失敗: ' + resData.error;
+                            statusMsg.className = 'status-msg status-error';
+                            analyzeBtn.disabled = false;
+                        } else {
+                            // Success! Rerender modal body with new data
+                            updateModalBody(resData.article, resData.paragraphs);
+                            // Refresh back-end list
+                            fetchArticles();
+                        }
+                    } catch (err) {
+                        statusMsg.innerText = '連線伺服器失敗: ' + err.message;
+                        statusMsg.className = 'status-msg status-error';
+                        analyzeBtn.disabled = false;
+                    }
+                };
+            }
+        };
         
-        modal.appendChild(modalContent);
-        document.body.appendChild(modal);
-        
-        // Close modal handlers
-        const closeBtn = modalContent.querySelector('#closeDetailBtn');
         const closeModal = () => {
             modal.remove();
         };
         
-        closeBtn.onclick = closeModal;
+        modal.appendChild(modalContent);
+        document.body.appendChild(modal);
+        
+        updateModalBody(article, paragraphs);
+        
         modal.onclick = (e) => {
             if (e.target === modal) closeModal();
         };
@@ -782,108 +838,56 @@ async function openArticleDetails(articleId) {
 }
 
 // ─── Article Import Logic ───
+const libImportTitle = document.getElementById('libImportTitle');
 const libImportTextarea = document.getElementById('libImportTextarea');
-const libReformatBtn = document.getElementById('libReformatBtn');
+const libDirectSaveBtn = document.getElementById('libDirectSaveBtn');
 const libImportStatus = document.getElementById('libImportStatus');
-const libImportPreview = document.getElementById('libImportPreview');
-const libPreviewTitle = document.getElementById('libPreviewTitle');
-const libPreviewBody = document.getElementById('libPreviewBody');
-const libPreviewParagraphs = document.getElementById('libPreviewParagraphs');
-const libSaveBtn = document.getElementById('libSaveBtn');
 
-if (libReformatBtn) {
-    libReformatBtn.onclick = async () => {
-        const content = libImportTextarea.value.trim();
+if (libDirectSaveBtn) {
+    libDirectSaveBtn.onclick = async () => {
+        const title = libImportTitle ? libImportTitle.value.trim() : '';
+        const content = libImportTextarea ? libImportTextarea.value.trim() : '';
+        
         if (!content) {
             alert('請貼入文章內容');
             return;
         }
 
-        libReformatBtn.disabled = true;
-        libImportStatus.innerText = '正在呼叫 AI 進行文章分析與排版，請稍後... ⏳';
+        libDirectSaveBtn.disabled = true;
+        libImportStatus.innerText = '正在儲存文章... 💾';
         libImportStatus.className = 'status-msg info';
-        libImportPreview.classList.add('hidden');
-        reformatData = null;
 
         try {
-            const res = await fetch('/api/articles/reformat', {
+            const res = await fetch('/api/articles/save-raw', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ title, originalContent: content })
             });
             const data = await res.json();
             
             if (data.error) {
-                libImportStatus.innerText = '分析失敗: ' + data.error;
+                libImportStatus.innerText = '儲存失敗: ' + data.error;
                 libImportStatus.className = 'status-msg status-error';
             } else {
-                reformatData = data;
-                reformatData.originalContent = content; // cache original
-                
-                libPreviewTitle.value = data.title || '';
-                libPreviewBody.innerHTML = renderMarkdown(data.reformatted || '');
-                
-                libPreviewParagraphs.innerHTML = data.paragraphs.map((p, i) => `
-                    <div class="paragraph-analysis-card">
-                        <div class="paragraph-analysis-header">
-                            <span>段落 #${i+1}</span>
-                            <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
-                        </div>
-                        <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
-                        <div style="font-size: 0.75rem; color: var(--text-dim);">
-                            👤 人物: ${(p.names || []).join('、') || '無'}
-                        </div>
-                    </div>
-                `).join('');
-                
-                libImportPreview.classList.remove('hidden');
-                libImportStatus.innerText = '文章分析完成！請檢視下方排版與段落切分，確認無誤後點擊「儲存文章」';
+                libImportStatus.innerText = `文章「${data.title}」已成功儲存！請至「文章庫列表」進行 AI 分析。`;
                 libImportStatus.className = 'status-msg status-success';
+                
+                if (libImportTitle) libImportTitle.value = '';
+                if (libImportTextarea) libImportTextarea.value = '';
+                
+                // Redirect to list sub-tab after 1.5 seconds
+                setTimeout(() => {
+                    const listSubTabBtn = document.querySelector('.sub-tab-btn[data-sub-tab="list"]');
+                    if (listSubTabBtn) {
+                        listSubTabBtn.click();
+                    }
+                }, 1500);
             }
         } catch (err) {
-            libImportStatus.innerText = '與伺服器連線失敗: ' + err.message;
+            libImportStatus.innerText = '連線伺服器失敗: ' + err.message;
             libImportStatus.className = 'status-msg status-error';
         } finally {
-            libReformatBtn.disabled = false;
-        }
-    };
-}
-
-if (libSaveBtn) {
-    libSaveBtn.onclick = async () => {
-        if (!reformatData) return;
-        
-        libSaveBtn.disabled = true;
-        libImportStatus.innerText = '正在儲存至資料庫... 💾';
-        libImportStatus.className = 'status-msg info';
-
-        try {
-            const res = await fetch('/api/articles/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    title: libPreviewTitle.value.trim() || reformatData.title,
-                    originalContent: reformatData.originalContent,
-                    reformatted: reformatData.reformatted,
-                    paragraphs: reformatData.paragraphs
-                })
-            });
-            const data = await res.json();
-            if (data.success) {
-                libImportStatus.innerText = `文章「${data.title}」已成功儲存！`;
-                libImportStatus.className = 'status-msg status-success';
-                libImportTextarea.value = '';
-                libImportPreview.classList.add('hidden');
-                reformatData = null;
-            } else {
-                libImportStatus.innerText = '儲存失敗';
-                libImportStatus.className = 'status-msg status-error';
-            }
-        } catch (err) {
-            libImportStatus.innerText = '儲存時連線錯誤';
-            libImportStatus.className = 'status-msg status-error';
-        } finally {
-            libSaveBtn.disabled = false;
+            libDirectSaveBtn.disabled = false;
         }
     };
 }
