@@ -4,8 +4,8 @@
   "description": "Download media from Tumblr posts",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "npm rebuild sqlite3 && node index.js",
+    "dev": "npm rebuild sqlite3 && nodemon index.js"
   },
   "dependencies": {
     "axios": "^1.6.2",
