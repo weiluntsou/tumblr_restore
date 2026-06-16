@@ -484,7 +484,7 @@ app.post('/api/articles/fetch-url', async (req, res) => {
         title = title.trim();
 
         // Clean up unnecessary tags
-        $('script, style, iframe, noscript, nav, footer, header, svg, aside, .comments, #comments').remove();
+        $('script, style, iframe, noscript, nav, footer, header, svg, aside, .comments, #comments, template, link, form, button, select, option, input, textarea, [style*="display: none"], [style*="display:none"], .hidden, .hide').remove();
 
         // Find main content area
         let contentArea = $('article');
@@ -503,6 +503,11 @@ app.post('/api/articles/fetch-url', async (req, res) => {
         text = text.replace(/\r\n/g, '\n')
                    .replace(/\n{3,}/g, '\n\n')
                    .trim();
+
+        // Limit the scraped text size to 100kb to prevent extreme lag and model input overflow
+        if (text.length > 100000) {
+            text = text.substring(0, 100000) + '\n\n...(因網頁內容過長，系統已自動截斷後半部分內容)...';
+        }
 
         if (!text) {
             return res.status(400).json({ error: '未能成功從該網址擷取到主要文字內容。' });
@@ -654,6 +659,14 @@ app.post('/api/articles/:id/analyze', async (req, res) => {
             return res.status(404).json({ error: '找不到該文章' });
         }
 
+        let originalContent = article.original_content || '';
+        const maxAnalyzeLength = 30000; // 30k characters limit
+        let truncatedNotice = '';
+        if (originalContent.length > maxAnalyzeLength) {
+            originalContent = originalContent.substring(0, maxAnalyzeLength);
+            truncatedNotice = '\n\n*(注意：因原文章內容過長，AI 僅分析與排版前 30,000 字)*';
+        }
+
         const prompt = `你是一個專業的文章排版與分析助手。請分析以下貼入的文章，並將其處理成結構化的 JSON 格式。
 
 處理要求：
@@ -680,7 +693,7 @@ app.post('/api/articles/:id/analyze', async (req, res) => {
 }
 
 原文章內容：
-${article.original_content}`;
+${originalContent}`;
 
         const responseText = await callGemini(prompt, true);
         
@@ -705,7 +718,7 @@ ${article.original_content}`;
 
         // Update database record
         const updatedTitle = result.title || article.title;
-        const reformatted = result.reformatted || '';
+        const reformatted = (result.reformatted || '') + truncatedNotice;
         
         await dbRun(
             `UPDATE articles SET title = ?, reformatted = ?, status = ? WHERE id = ?`,
