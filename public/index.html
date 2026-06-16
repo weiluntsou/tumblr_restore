@@ -89,6 +89,17 @@
                         <p style="color: var(--text-dim); margin-bottom: 20px;">
                             貼上您的文章內容，系統將先進行快速儲存。隨後您可在文章庫列表中隨時對其進行 AI 結構分析。
                         </p>
+                        
+                        <!-- 網址擷取區塊 -->
+                        <div class="url-fetch-container" style="background: rgba(255, 255, 255, 0.03); border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                            <label for="libFetchUrl" style="display: block; font-weight: 500; margin-bottom: 8px; font-size: 14px;">貼上網址自動擷取文章內容：</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="url" id="libFetchUrl" placeholder="例如：https://example.com/article" style="flex: 1; margin: 0; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 8px; color: var(--text-color);" autocomplete="off">
+                                <button id="libFetchUrlBtn" class="primary-btn" style="background: linear-gradient(135deg, #6366f1, #4f46e5); margin: 0; padding: 8px 18px; font-size: 14px; white-space: nowrap;">開始擷取</button>
+                            </div>
+                            <div id="libFetchStatus" style="font-size: 12px; margin-top: 8px; min-height: 18px; line-height: 18px;"></div>
+                        </div>
+
                         <div class="form-group">
                             <label for="libImportTitle">文章標題 (選填)</label>
                             <input type="text" id="libImportTitle" placeholder="留空則自動命名為「未命名文章 - 日期」" autocomplete="off">
@@ -137,9 +148,15 @@
 
                     <!-- 生成結果顯示 -->
                     <div id="libGenResult" class="card glass hidden">
-                        <div class="results-header">
+                        <div class="results-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                             <h2>重組生成文章結果</h2>
-                            <button id="libGenCopyBtn" class="icon-btn secondary-btn">📋 複製內容</button>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; color: var(--text-dim); user-select: none; margin: 0;">
+                                    <input type="checkbox" id="genToggleIllustrations" style="cursor: pointer; margin: 0;">
+                                    🖼️ 隨機插圖
+                                </label>
+                                <button id="libGenCopyBtn" class="icon-btn secondary-btn" style="margin: 0;">📋 複製內容</button>
+                            </div>
                         </div>
                         <div id="libGenResultBody" class="reformatted-content-view" style="margin-top: 20px;"></div>
                     </div>

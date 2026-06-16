@@ -458,6 +458,64 @@ async function callGemini(prompt, responseJson = false) {
 }
 
 /**
+ * API: Fetch and extract content from a given web page URL
+ */
+app.post('/api/articles/fetch-url', async (req, res) => {
+    const { url } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: '請提供網址' });
+    }
+
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+            },
+            timeout: 10000 // 10 seconds timeout
+        });
+
+        const html = response.data;
+        const $ = cheerio.load(html);
+
+        // Extract title
+        let title = $('meta[property="og:title"]').attr('content') || $('title').text() || '';
+        title = title.trim();
+
+        // Clean up unnecessary tags
+        $('script, style, iframe, noscript, nav, footer, header, svg, aside, .comments, #comments').remove();
+
+        // Find main content area
+        let contentArea = $('article');
+        if (contentArea.length === 0) contentArea = $('main');
+        if (contentArea.length === 0) contentArea = $('[id*="content"], [class*="content"], [class*="article"]');
+        if (contentArea.length === 0) contentArea = $('body');
+
+        // Add linebreaks to block tags to preserve layout structure
+        contentArea.find('p, h1, h2, h3, h4, h5, h6, li, tr, div').each((i, el) => {
+            $(el).append('\n');
+        });
+
+        let text = contentArea.text();
+        
+        // Cleanup extra line breaks & whitespaces
+        text = text.replace(/\r\n/g, '\n')
+                   .replace(/\n{3,}/g, '\n\n')
+                   .trim();
+
+        if (!text) {
+            return res.status(400).json({ error: '未能成功從該網址擷取到主要文字內容。' });
+        }
+
+        res.json({ title, content: text });
+    } catch (e) {
+        console.error('Fetch URL content error:', e.message);
+        res.status(500).json({ error: '無法擷取網頁內容，請確認網址是否正確或目標網站是否限制了存取: ' + e.message });
+    }
+});
+
+/**
  * API: Reformat pasted article, segment into paragraphs, detect roles (起承轉合), extract names
  */
 app.post('/api/articles/reformat', async (req, res) => {

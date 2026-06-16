@@ -957,3 +957,27 @@ footer {
         font-size: 0.8rem;
     }
 }
+
+/* Article inline illustrations */
+.article-inline-image-container {
+    text-align: center;
+    margin: 24px 0;
+    width: 100%;
+}
+
+.article-inline-image {
+    max-width: 100%;
+    max-height: 380px;
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+}
+
+.article-inline-image:hover {
+    transform: scale(1.02);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.5);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+

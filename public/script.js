@@ -21,6 +21,51 @@ let selectedIndices = new Set();
 // Flag to prevent double-triggering fetch from paste + input events
 let pasteAutoFetchTriggered = false;
 
+// --- Article Library Random Illustrations ---
+let enableRandomIllustrations = true;
+let cachedImages = [];
+
+async function fetchCachedImages() {
+    try {
+        const res = await fetch('/api/downloads');
+        const data = await res.json();
+        cachedImages = data.files.filter(f => f.type === 'image');
+    } catch (e) {
+        console.error('Failed to load images for illustration', e);
+        cachedImages = [];
+    }
+}
+
+function renderMarkdownWithImages(md, images) {
+    let html = renderMarkdown(md);
+    if (!images || images.length === 0) return html;
+
+    const paragraphs = html.split('</p>');
+    if (paragraphs.length <= 1) return html;
+
+    let newHtml = '';
+    let imgIndex = 0;
+    const shuffledImages = [...images].sort(() => 0.5 - Math.random());
+
+    paragraphs.forEach((p, idx) => {
+        if (idx === paragraphs.length - 1) {
+            newHtml += p;
+            return;
+        }
+        newHtml += p + '</p>';
+
+        if ((idx + 1) % 2 === 0 && imgIndex < shuffledImages.length) {
+            const img = shuffledImages[imgIndex++];
+            newHtml += `
+                <div class="article-inline-image-container">
+                    <img src="${img.url}" class="article-inline-image" alt="插圖" onclick="openViewer({ type: 'image', url: '${img.url}' })">
+                </div>
+            `;
+        }
+    });
+    return newHtml;
+}
+
 // --- Mobile-friendly clipboard paste logic ---
 pasteBtn.addEventListener('click', async () => {
     // Strategy 1: Modern Clipboard API (works on desktop Chrome/Firefox, some Android)
@@ -713,6 +758,9 @@ function renderArticles(articles) {
 
 async function openArticleDetails(articleId) {
     try {
+        // Fetch latest images for random illustrations
+        await fetchCachedImages();
+
         const response = await fetch(`/api/articles/${articleId}`);
         const data = await response.json();
         
@@ -732,8 +780,12 @@ async function openArticleDetails(articleId) {
             const innerIsRaw = art.status === 'raw';
             
             modalContent.innerHTML = `
-                <div class="modal-controls" style="position: absolute; top: 20px; right: 20px;">
-                    <span class="close-btn" id="closeDetailBtn">&times;</span>
+                <div class="modal-controls" style="position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: 15px; z-index: 10;">
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; color: var(--text-dim); user-select: none; margin: 0;">
+                        <input type="checkbox" id="toggleIllustrations" ${enableRandomIllustrations ? 'checked' : ''} style="cursor: pointer; margin: 0;">
+                        🖼️ 隨機插圖
+                    </label>
+                    <span class="close-btn" id="closeDetailBtn" style="position: static; line-height: 1;">&times;</span>
                 </div>
                 <div style="width: 100%; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
                     <h2 style="margin-bottom: 5px; font-weight: 600;">${escapeHtml(art.title)}</h2>
@@ -745,7 +797,7 @@ async function openArticleDetails(articleId) {
                         <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
                             <h3 style="margin-bottom: 10px;">排版內容</h3>
                             <div class="reformatted-content-view" style="flex: 1; max-height: none; white-space: ${innerIsRaw ? 'pre-wrap' : 'normal'};">
-                                ${innerIsRaw ? escapeHtml(art.originalContent) : renderMarkdown(art.reformatted)}
+                                ${innerIsRaw ? escapeHtml(art.originalContent) : (enableRandomIllustrations ? renderMarkdownWithImages(art.reformatted, cachedImages) : renderMarkdown(art.reformatted))}
                             </div>
                         </div>
                         <div class="preview-column" id="modalRightColumn" style="display: flex; flex-direction: column; height: 100%;">
@@ -761,18 +813,37 @@ async function openArticleDetails(articleId) {
                             ` : `
                                 <h3 style="margin-bottom: 10px;">段落細節紀錄 (${paras.length})</h3>
                                 <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
-                                    ${paras.map((p, i) => `
-                                        <div class="paragraph-analysis-card">
-                                            <div class="paragraph-analysis-header">
-                                                <span>段落 #${i+1}</span>
-                                                <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
-                                            </div>
-                                            <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
-                                            <div style="font-size: 0.75rem; color: var(--text-dim);">
-                                                👤 人物: ${(p.names || []).join('、') || '無'}
-                                            </div>
-                                        </div>
-                                    `).join('')}
+                                    ${(() => {
+                                        let rightColHtml = '';
+                                        let imgIndexRight = 0;
+                                        const shuffledImagesRight = [...cachedImages].sort(() => 0.5 - Math.random());
+                                        
+                                        paras.forEach((p, i) => {
+                                            rightColHtml += `
+                                                <div class="paragraph-analysis-card">
+                                                    <div class="paragraph-analysis-header">
+                                                        <span>段落 #${i+1}</span>
+                                                        <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
+                                                    </div>
+                                                    <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
+                                                    <div style="font-size: 0.75rem; color: var(--text-dim);">
+                                                        👤 人物: ${(p.names || []).join('、') || '無'}
+                                                    </div>
+                                                </div>
+                                            `;
+                                            
+                                            if (enableRandomIllustrations && (i + 1) % 2 === 0 && imgIndexRight < shuffledImagesRight.length) {
+                                                const img = shuffledImagesRight[imgIndexRight++];
+                                                rightColHtml += `
+                                                    <div class="paragraph-analysis-card" style="padding: 10px; text-align: center; cursor: pointer; border: 1px dashed var(--glass-border);" onclick="openViewer({ type: 'image', url: '${img.url}' })">
+                                                        <img src="${img.url}" style="max-width: 100%; max-height: 150px; border-radius: 6px; object-fit: cover;">
+                                                        <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 5px;">🖼️ 圖片庫插圖</div>
+                                                    </div>
+                                                `;
+                                            }
+                                        });
+                                        return rightColHtml;
+                                    })()}
                                 </div>
                             `}
                         </div>
@@ -783,6 +854,15 @@ async function openArticleDetails(articleId) {
             // Re-bind close handler
             const closeBtn = modalContent.querySelector('#closeDetailBtn');
             closeBtn.onclick = closeModal;
+
+            // Re-bind illustrations toggle
+            const toggleBtn = modalContent.querySelector('#toggleIllustrations');
+            if (toggleBtn) {
+                toggleBtn.onchange = (e) => {
+                    enableRandomIllustrations = e.target.checked;
+                    updateModalBody(art, paras);
+                };
+            }
             
             // Re-bind analyze handler if raw
             if (innerIsRaw) {
@@ -960,9 +1040,26 @@ if (libGenerateBtn) {
                 libGenStatus.innerText = '生成失敗: ' + data.error;
                 libGenStatus.className = 'status-msg status-error';
             } else {
-                libGenResultBody.innerHTML = renderMarkdown(data.article);
+                // Fetch latest images first
+                await fetchCachedImages();
+
+                const updateGenResult = () => {
+                    libGenResultBody.innerHTML = enableRandomIllustrations ? renderMarkdownWithImages(data.article, cachedImages) : renderMarkdown(data.article);
+                };
+
+                updateGenResult();
                 libGenResult.classList.remove('hidden');
                 
+                // Bind toggle illustrations checkbox
+                const genToggle = document.getElementById('genToggleIllustrations');
+                if (genToggle) {
+                    genToggle.checked = enableRandomIllustrations;
+                    genToggle.onchange = (e) => {
+                        enableRandomIllustrations = e.target.checked;
+                        updateGenResult();
+                    };
+                }
+
                 libGenStatus.innerText = '文章生成完成！已符合起承轉合結構，並已完成人名替换與過渡句補寫。';
                 libGenStatus.className = 'status-msg status-success';
                 
