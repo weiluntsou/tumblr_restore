@@ -24,6 +24,7 @@ let pasteAutoFetchTriggered = false;
 // --- Article Library Random Illustrations ---
 let enableRandomIllustrations = true;
 let cachedImages = [];
+let currentReaderFontScale = 100; // Font size scale percentage (70% to 160%)
 
 async function fetchCachedImages() {
     try {
@@ -819,8 +820,7 @@ async function openArticleDetails(articleId) {
         modal.id = 'articleDetailModal';
         
         const modalContent = document.createElement('div');
-        modalContent.className = 'modal-content glass';
-        modalContent.style.cssText = 'width: 90%; max-width: 900px; height: 85vh; padding: 30px;';
+        modalContent.className = 'modal-content glass article-detail-modal-content';
         
         const updateModalBody = (art, paras) => {
             const formattedDate = new Date(art.createdAt).toLocaleDateString('zh-TW');
@@ -842,34 +842,49 @@ async function openArticleDetails(articleId) {
             }
             
             modalContent.innerHTML = `
-                <div class="modal-controls" style="position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: 15px; z-index: 10;">
-                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; color: var(--text-dim); user-select: none; margin: 0;">
-                        <input type="checkbox" id="toggleIllustrations" ${enableRandomIllustrations ? 'checked' : ''} style="cursor: pointer; margin: 0;">
-                        🖼️ 隨機插圖
-                    </label>
-                    <span class="close-btn" id="closeDetailBtn" style="position: static; line-height: 1;">&times;</span>
+                <div class="modal-header-bar" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); padding-bottom: 12px; margin-bottom: 15px; flex-shrink: 0; gap: 15px; width: 100%;">
+                    <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1;">
+                        <span class="close-btn" id="closeDetailBtnMobile" style="font-size: 1.8rem; cursor: pointer; line-height: 1; padding: 0 5px;">&larr;</span>
+                        <h2 style="margin: 0; font-weight: 600; font-size: 1.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(art.title)}</h2>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                        <div class="font-size-adjuster" style="display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); padding: 2px 8px; border-radius: 20px;">
+                            <button id="fontDecBtn" style="background: none; border: none; color: var(--text); cursor: pointer; font-size: 0.75rem; font-weight: bold; padding: 2px 5px;">A-</button>
+                            <span id="fontSizeDisplay" style="font-size: 0.7rem; color: var(--text-dim); min-width: 32px; text-align: center; font-weight: bold;">${currentReaderFontScale}%</span>
+                            <button id="fontIncBtn" style="background: none; border: none; color: var(--text); cursor: pointer; font-size: 0.75rem; font-weight: bold; padding: 2px 5px;">A+</button>
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 4px; font-size: 0.8rem; cursor: pointer; color: var(--text-dim); user-select: none; margin: 0; white-space: nowrap;">
+                            <input type="checkbox" id="toggleIllustrations" ${enableRandomIllustrations ? 'checked' : ''} style="cursor: pointer; margin: 0;">
+                            🖼️ 插圖
+                        </label>
+                        <span class="close-btn" id="closeDetailBtn" style="line-height: 1; font-size: 1.8rem;">&times;</span>
+                    </div>
                 </div>
-                <div style="width: 100%; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-                    <h2 style="margin-bottom: 5px; font-weight: 600;">${escapeHtml(art.title)}</h2>
-                    <div style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px;">
-                        儲存日期: ${formattedDate} | 人物: ${innerIsRaw ? '尚未分析' : (art.names || []).join('、') || '無'}
+
+                <div class="modal-tab-bar" style="width: 100%; gap: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; flex-shrink: 0;">
+                    <button id="modalTabRead" class="sub-tab-btn active" style="flex: 1; padding: 8px 0; border-radius: 6px; font-weight: bold;">📖 閱讀排版</button>
+                    <button id="modalTabParas" class="sub-tab-btn" style="flex: 1; padding: 8px 0; border-radius: 6px; font-weight: bold;">🧩 段落清單 (${paras.length})</button>
+                </div>
+
+                <div class="preview-layout" style="width: 100%; min-height: 0;">
+                    <div class="preview-column active-tab" style="height: 100%;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0; width: 100%;">
+                            <h3 style="margin: 0; font-size: 1rem;">排版內容</h3>
+                            <span style="color: var(--text-dim); font-size: 0.75rem;">儲存日期: ${formattedDate} | 人物: ${innerIsRaw ? '尚未分析' : (art.names || []).join('、') || '無'}</span>
+                        </div>
+                        <div class="reformatted-content-view" id="modalContentView" style="white-space: ${innerIsRaw ? 'pre-wrap' : 'normal'};">
+                            ${contentHtml}
+                        </div>
                     </div>
                     
-                    <div class="preview-layout" style="flex: 1; min-height: 0; margin-top: 10px;">
-                        <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
-                            <h3 style="margin-bottom: 10px;">排版內容</h3>
-                            <div class="reformatted-content-view" id="modalContentView" style="flex: 1; max-height: none; white-space: ${innerIsRaw ? 'pre-wrap' : 'normal'};">
-                                ${contentHtml}
-                            </div>
+                    <div class="preview-column" id="modalRightColumn" style="height: 100%;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0; width: 100%;">
+                            <h3 style="margin: 0; font-size: 1rem;">段落細節紀錄 (${paras.length})</h3>
+                            ${innerIsRaw ? `
+                                <button id="libStartAnalysisBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-weight: bold; padding: 4px 10px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; margin: 0;">🤖 AI 優化角色與人名</button>
+                            ` : ''}
                         </div>
-                        <div class="preview-column" id="modalRightColumn" style="display: flex; flex-direction: column; height: 100%;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                <h3 style="margin: 0;">段落細節紀錄 (${paras.length})</h3>
-                                ${innerIsRaw ? `
-                                    <button id="libStartAnalysisBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-weight: bold; padding: 6px 12px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; margin: 0;">🤖 AI 優化角色與人名</button>
-                                ` : ''}
-                            </div>
-                            ${innerIsRaw ? `<div id="libAnalysisModalStatus" class="status-msg" style="margin-bottom: 10px; font-size: 0.8rem; display: none;"></div>` : ''}
+                        ${innerIsRaw ? `<div id="libAnalysisModalStatus" class="status-msg" style="margin-bottom: 10px; font-size: 0.8rem; display: none;"></div>` : ''}
                             <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
                                 ${(() => {
                                     let rightColHtml = '';
@@ -911,9 +926,17 @@ async function openArticleDetails(articleId) {
                 </div>
             `;
             
-            // Re-bind close handler
+            const contentView = modalContent.querySelector('#modalContentView');
+            if (contentView) {
+                contentView.style.fontSize = `${0.95 * (currentReaderFontScale / 100)}rem`;
+            }
+
+            // Re-bind close handlers
             const closeBtn = modalContent.querySelector('#closeDetailBtn');
-            closeBtn.onclick = closeModal;
+            if (closeBtn) closeBtn.onclick = closeModal;
+            
+            const closeBtnMobile = modalContent.querySelector('#closeDetailBtnMobile');
+            if (closeBtnMobile) closeBtnMobile.onclick = closeModal;
             
             // Re-bind Load All button if it exists
             const loadAllBtn = modalContent.querySelector('#modalLoadAllBtn');
@@ -923,6 +946,61 @@ async function openArticleDetails(articleId) {
                     if (contentView) {
                         contentView.innerHTML = escapeHtml(art.originalContent);
                     }
+                };
+            }
+
+            // Re-bind font scale adjuster
+            const decBtn = modalContent.querySelector('#fontDecBtn');
+            const incBtn = modalContent.querySelector('#fontIncBtn');
+            const sizeDisplay = modalContent.querySelector('#fontSizeDisplay');
+            if (decBtn && incBtn && sizeDisplay && contentView) {
+                decBtn.onclick = () => {
+                    if (currentReaderFontScale > 70) {
+                        currentReaderFontScale -= 10;
+                        contentView.style.fontSize = `${0.95 * (currentReaderFontScale / 100)}rem`;
+                        sizeDisplay.innerText = currentReaderFontScale + '%';
+                    }
+                };
+                incBtn.onclick = () => {
+                    if (currentReaderFontScale < 160) {
+                        currentReaderFontScale += 10;
+                        contentView.style.fontSize = `${0.95 * (currentReaderFontScale / 100)}rem`;
+                        sizeDisplay.innerText = currentReaderFontScale + '%';
+                    }
+                };
+            }
+
+            // Re-bind mobile tabs switching
+            const tabRead = modalContent.querySelector('#modalTabRead');
+            const tabParas = modalContent.querySelector('#modalTabParas');
+            const colLeft = modalContent.querySelector('.preview-column:first-child');
+            const colRight = modalContent.querySelector('#modalRightColumn');
+            
+            if (colLeft && colRight) {
+                if (tabRead && tabRead.classList.contains('active')) {
+                    colLeft.classList.add('active-tab');
+                    colRight.classList.remove('active-tab');
+                } else if (tabParas && tabParas.classList.contains('active')) {
+                    colRight.classList.add('active-tab');
+                    colLeft.classList.remove('active-tab');
+                } else {
+                    colLeft.classList.add('active-tab');
+                    colRight.classList.remove('active-tab');
+                }
+            }
+
+            if (tabRead && tabParas && colLeft && colRight) {
+                tabRead.onclick = () => {
+                    tabRead.classList.add('active');
+                    tabParas.classList.remove('active');
+                    colLeft.classList.add('active-tab');
+                    colRight.classList.remove('active-tab');
+                };
+                tabParas.onclick = () => {
+                    tabParas.classList.add('active');
+                    tabRead.classList.remove('active');
+                    colRight.classList.add('active-tab');
+                    colLeft.classList.remove('active-tab');
                 };
             }
 
