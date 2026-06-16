@@ -624,6 +624,19 @@ app.post('/api/articles/save', async (req, res) => {
 });
 
 /**
+ * Helper to split paragraphs programmatically
+ */
+function splitParagraphsProgrammatically(text) {
+    if (!text) return [];
+    let paras = text.replace(/\r\n/g, '\n').split(/\n\s*\n+/);
+    paras = paras.map(p => p.trim()).filter(Boolean);
+    if (paras.length <= 1 && text.includes('\n')) {
+        paras = text.split('\n').map(p => p.trim()).filter(Boolean);
+    }
+    return paras;
+}
+
+/**
  * API: Save raw article without analysis
  */
 app.post('/api/articles/save-raw', async (req, res) => {
@@ -637,10 +650,44 @@ app.post('/api/articles/save-raw', async (req, res) => {
         const finalTitle = title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`;
         const createdAt = new Date().toISOString();
 
+        // Save article (set reformatted initially to originalContent)
         await dbRun(
             `INSERT INTO articles (id, title, original_content, reformatted, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-            [articleId, finalTitle, originalContent, '', 'raw', createdAt]
+            [articleId, finalTitle, originalContent, originalContent, 'raw', createdAt]
         );
+
+        // Segment paragraphs programmatically
+        const rawParas = splitParagraphsProgrammatically(originalContent);
+        
+        // Save paragraphs with programmatic role distribution (起 -> 承 -> 轉 -> 合)
+        for (let idx = 0; idx < rawParas.length; idx++) {
+            const pContent = rawParas[idx];
+            const paragraphId = `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`;
+            
+            let role = '承';
+            if (rawParas.length === 1) {
+                role = '承';
+            } else if (rawParas.length === 2) {
+                role = idx === 0 ? '起' : '合';
+            } else if (rawParas.length === 3) {
+                if (idx === 0) role = '起';
+                else if (idx === 1) role = '承';
+                else role = '合';
+            } else {
+                if (idx === 0) role = '起';
+                else if (idx === rawParas.length - 1) role = '合';
+                else {
+                    const ratio = idx / rawParas.length;
+                    if (ratio > 0.6) role = '轉';
+                    else role = '承';
+                }
+            }
+
+            await dbRun(
+                `INSERT INTO paragraphs (id, article_id, content, role, names, seq) VALUES (?, ?, ?, ?, ?, ?)`,
+                [paragraphId, articleId, pContent, role, JSON.stringify([]), idx]
+            );
+        }
 
         res.json({ success: true, articleId, title: finalTitle });
     } catch (e) {
