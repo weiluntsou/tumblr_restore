@@ -354,29 +354,72 @@ app.delete('/api/downloads/:filename', async (req, res) => {
     }
 });
 
-// ─── Article Library & Paragraph Database ───────────────────────
+// ─── Article Library & SQLite Database ───────────────────────
+const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, 'data');
-const ARTICLES_FILE = path.join(DATA_DIR, 'articles.json');
+const DB_FILE = path.join(DATA_DIR, 'articles.db');
 
-// Ensure data folder and database file exist
+// Ensure data folder exists
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
-if (!fs.existsSync(ARTICLES_FILE)) {
-    fs.writeFileSync(ARTICLES_FILE, JSON.stringify({ articles: [], paragraphs: [] }, null, 2));
-}
 
-async function loadArticlesDB() {
-    try {
-        const data = await fs.promises.readFile(ARTICLES_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (e) {
-        return { articles: [], paragraphs: [] };
+// Open SQLite database
+const db = new sqlite3.Database(DB_FILE, (err) => {
+    if (err) {
+        console.error('Error opening SQLite database:', err.message);
+    } else {
+        console.log('Connected to the SQLite database.');
+        db.run('PRAGMA foreign_keys = ON;');
+        db.serialize(() => {
+            db.run(`CREATE TABLE IF NOT EXISTS articles (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                original_content TEXT NOT NULL,
+                reformatted TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'raw',
+                created_at TEXT NOT NULL
+            );`);
+
+            db.run(`CREATE TABLE IF NOT EXISTS paragraphs (
+                id TEXT PRIMARY KEY,
+                article_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                role TEXT NOT NULL,
+                names TEXT NOT NULL, -- JSON string array
+                seq INTEGER NOT NULL,
+                FOREIGN KEY (article_id) REFERENCES articles (id) ON DELETE CASCADE
+            );`);
+        });
     }
+});
+
+// Promise-based wrappers for SQLite
+function dbRun(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (err) {
+            if (err) reject(err);
+            else resolve(this);
+        });
+    });
 }
 
-async function saveArticlesDB(db) {
-    await fs.promises.writeFile(ARTICLES_FILE, JSON.stringify(db, null, 2), 'utf8');
+function dbAll(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows);
+        });
+    });
+}
+
+function dbGet(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.get(sql, params, (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
+    });
 }
 
 /**
@@ -477,8 +520,8 @@ app.post('/api/articles/save', async (req, res) => {
     }
 
     try {
-        const db = await loadArticlesDB();
         const articleId = `art_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const finalTitle = title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`;
         
         // Collect all unique names in this article
         const allNamesSet = new Set();
@@ -491,34 +534,25 @@ app.post('/api/articles/save', async (req, res) => {
             }
         });
         const allNames = Array.from(allNamesSet);
+        const createdAt = new Date().toISOString();
 
-        // Create article record
-        const newArticle = {
-            id: articleId,
-            title: title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`,
-            originalContent,
-            reformatted: reformatted || '',
-            names: allNames,
-            status: 'analyzed',
-            createdAt: new Date().toISOString()
-        };
+        // Save article
+        await dbRun(
+            `INSERT INTO articles (id, title, original_content, reformatted, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            [articleId, finalTitle, originalContent, reformatted || '', 'analyzed', createdAt]
+        );
 
-        // Create paragraphs records
-        const newParagraphs = paragraphs.map((p, idx) => ({
-            id: `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`,
-            articleId,
-            content: p.content || '',
-            role: p.role || '承',
-            names: p.names || [],
-            seq: idx
-        }));
+        // Save paragraphs
+        for (let idx = 0; idx < paragraphs.length; idx++) {
+            const p = paragraphs[idx];
+            const paragraphId = `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`;
+            await dbRun(
+                `INSERT INTO paragraphs (id, article_id, content, role, names, seq) VALUES (?, ?, ?, ?, ?, ?)`,
+                [paragraphId, articleId, p.content || '', p.role || '承', JSON.stringify(p.names || []), idx]
+            );
+        }
 
-        db.articles.push(newArticle);
-        db.paragraphs.push(...newParagraphs);
-        
-        await saveArticlesDB(db);
-        
-        res.json({ success: true, articleId, title: newArticle.title });
+        res.json({ success: true, articleId, title: finalTitle });
     } catch (e) {
         console.error('Save article error:', e);
         res.status(500).json({ error: '儲存文章時發生錯誤: ' + e.message });
@@ -535,23 +569,16 @@ app.post('/api/articles/save-raw', async (req, res) => {
     }
 
     try {
-        const db = await loadArticlesDB();
         const articleId = `art_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const finalTitle = title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`;
+        const createdAt = new Date().toISOString();
 
-        const newArticle = {
-            id: articleId,
-            title: title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`,
-            originalContent,
-            reformatted: '',
-            names: [],
-            status: 'raw',
-            createdAt: new Date().toISOString()
-        };
+        await dbRun(
+            `INSERT INTO articles (id, title, original_content, reformatted, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            [articleId, finalTitle, originalContent, '', 'raw', createdAt]
+        );
 
-        db.articles.push(newArticle);
-        await saveArticlesDB(db);
-
-        res.json({ success: true, articleId, title: newArticle.title });
+        res.json({ success: true, articleId, title: finalTitle });
     } catch (e) {
         console.error('Save raw article error:', e);
         res.status(500).json({ error: '儲存文章時發生錯誤: ' + e.message });
@@ -564,13 +591,10 @@ app.post('/api/articles/save-raw', async (req, res) => {
 app.post('/api/articles/:id/analyze', async (req, res) => {
     const articleId = req.params.id;
     try {
-        const db = await loadArticlesDB();
-        const articleIndex = db.articles.findIndex(art => art.id === articleId);
-        if (articleIndex === -1) {
+        const article = await dbGet(`SELECT * FROM articles WHERE id = ?`, [articleId]);
+        if (!article) {
             return res.status(404).json({ error: '找不到該文章' });
         }
-
-        const article = db.articles[articleIndex];
 
         const prompt = `你是一個專業的文章排版與分析助手。請分析以下貼入的文章，並將其處理成結構化的 JSON 格式。
 
@@ -598,7 +622,7 @@ app.post('/api/articles/:id/analyze', async (req, res) => {
 }
 
 原文章內容：
-${article.originalContent}`;
+${article.original_content}`;
 
         const responseText = await callGemini(prompt, true);
         
@@ -622,29 +646,51 @@ ${article.originalContent}`;
         const allNames = Array.from(allNamesSet);
 
         // Update database record
-        article.title = result.title || article.title;
-        article.reformatted = result.reformatted || '';
-        article.names = allNames;
-        article.status = 'analyzed';
+        const updatedTitle = result.title || article.title;
+        const reformatted = result.reformatted || '';
+        
+        await dbRun(
+            `UPDATE articles SET title = ?, reformatted = ?, status = ? WHERE id = ?`,
+            [updatedTitle, reformatted, 'analyzed', articleId]
+        );
 
-        // Clear any existing paragraphs for this article just in case
-        db.paragraphs = db.paragraphs.filter(p => p.articleId !== articleId);
+        // Clear any existing paragraphs for this article
+        await dbRun(`DELETE FROM paragraphs WHERE article_id = ?`, [articleId]);
 
         // Save paragraphs
-        const newParagraphs = result.paragraphs.map((p, idx) => ({
-            id: `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`,
-            articleId,
-            content: p.content || '',
-            role: p.role || '承',
-            names: p.names || [],
-            seq: idx
+        for (let idx = 0; idx < result.paragraphs.length; idx++) {
+            const p = result.paragraphs[idx];
+            const paragraphId = `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`;
+            await dbRun(
+                `INSERT INTO paragraphs (id, article_id, content, role, names, seq) VALUES (?, ?, ?, ?, ?, ?)`,
+                [paragraphId, articleId, p.content || '', p.role || '承', JSON.stringify(p.names || []), idx]
+            );
+        }
+
+        // Fetch new paragraphs list to return
+        const dbParagraphs = await dbAll(`SELECT * FROM paragraphs WHERE article_id = ? ORDER BY seq ASC`, [articleId]);
+        const formattedParagraphs = dbParagraphs.map(p => ({
+            id: p.id,
+            articleId: p.article_id,
+            content: p.content,
+            role: p.role,
+            names: JSON.parse(p.names),
+            seq: p.seq
         }));
 
-        db.paragraphs.push(...newParagraphs);
-        
-        await saveArticlesDB(db);
-
-        res.json({ success: true, article, paragraphs: newParagraphs });
+        res.json({
+            success: true,
+            article: {
+                id: articleId,
+                title: updatedTitle,
+                originalContent: article.original_content,
+                reformatted,
+                names: allNames,
+                status: 'analyzed',
+                createdAt: article.created_at
+            },
+            paragraphs: formattedParagraphs
+        });
     } catch (e) {
         console.error('Analyze article error:', e);
         res.status(500).json({ error: 'AI 分析時發生錯誤: ' + e.message });
@@ -656,23 +702,56 @@ ${article.originalContent}`;
  */
 app.get('/api/articles', async (req, res) => {
     try {
-        const db = await loadArticlesDB();
-        const list = db.articles.map(art => {
-            const artParagraphs = db.paragraphs.filter(p => p.articleId === art.id);
-            return {
+        const articles = await dbAll(`SELECT * FROM articles ORDER BY created_at DESC`);
+        const list = [];
+        
+        for (const art of articles) {
+            // Get paragraph counts & names
+            const paragraphs = await dbAll(`SELECT names FROM paragraphs WHERE article_id = ?`, [art.id]);
+            const namesSet = new Set();
+            paragraphs.forEach(p => {
+                try {
+                    const parsedNames = JSON.parse(p.names);
+                    parsedNames.forEach(n => namesSet.add(n));
+                } catch(err) {}
+            });
+            
+            list.push({
                 id: art.id,
                 title: art.title,
-                createdAt: art.createdAt,
-                names: art.names || [],
+                createdAt: art.created_at,
+                names: Array.from(namesSet),
                 status: art.status || 'analyzed',
                 wordCount: art.reformatted ? art.reformatted.length : 0,
-                paragraphCount: artParagraphs.length
-            };
-        });
-        list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                paragraphCount: paragraphs.length
+            });
+        }
+        
         res.json({ articles: list });
     } catch (e) {
         res.status(500).json({ error: '無法讀取文章列表' });
+    }
+});
+
+/**
+ * API: Get list of all unique names in database
+ */
+app.get('/api/articles/names', async (req, res) => {
+    try {
+        const paragraphs = await dbAll(`SELECT names FROM paragraphs`);
+        const allNamesSet = new Set();
+        paragraphs.forEach(p => {
+            try {
+                const parsedNames = JSON.parse(p.names);
+                parsedNames.forEach(n => {
+                    const trimmed = n.trim();
+                    if (trimmed) allNamesSet.add(trimmed);
+                });
+            } catch (err) {}
+        });
+        res.json({ names: Array.from(allNamesSet) });
+    } catch (e) {
+        res.status(500).json({ error: '讀取名字清單失敗' });
     }
 });
 
@@ -681,16 +760,39 @@ app.get('/api/articles', async (req, res) => {
  */
 app.get('/api/articles/:id', async (req, res) => {
     try {
-        const db = await loadArticlesDB();
-        const article = db.articles.find(art => art.id === req.params.id);
+        const article = await dbGet(`SELECT * FROM articles WHERE id = ?`, [req.params.id]);
         if (!article) {
             return res.status(404).json({ error: '找不到該文章' });
         }
-        const paragraphs = db.paragraphs
-            .filter(p => p.articleId === article.id)
-            .sort((a, b) => a.seq - b.seq);
-            
-        res.json({ article, paragraphs });
+        
+        const paragraphs = await dbAll(`SELECT * FROM paragraphs WHERE article_id = ? ORDER BY seq ASC`, [article.id]);
+        const formattedParagraphs = paragraphs.map(p => ({
+            id: p.id,
+            articleId: p.article_id,
+            content: p.content,
+            role: p.role,
+            names: JSON.parse(p.names),
+            seq: p.seq
+        }));
+
+        // Collect names
+        const namesSet = new Set();
+        formattedParagraphs.forEach(p => {
+            p.names.forEach(n => namesSet.add(n));
+        });
+
+        res.json({
+            article: {
+                id: article.id,
+                title: article.title,
+                originalContent: article.original_content,
+                reformatted: article.reformatted,
+                names: Array.from(namesSet),
+                status: article.status,
+                createdAt: article.created_at
+            },
+            paragraphs: formattedParagraphs
+        });
     } catch (e) {
         res.status(500).json({ error: '無法讀取文章內容' });
     }
@@ -701,37 +803,12 @@ app.get('/api/articles/:id', async (req, res) => {
  */
 app.delete('/api/articles/:id', async (req, res) => {
     try {
-        const db = await loadArticlesDB();
         const articleId = req.params.id;
-        
-        db.articles = db.articles.filter(art => art.id !== articleId);
-        db.paragraphs = db.paragraphs.filter(p => p.articleId !== articleId);
-        
-        await saveArticlesDB(db);
+        await dbRun(`DELETE FROM paragraphs WHERE article_id = ?`, [articleId]);
+        await dbRun(`DELETE FROM articles WHERE id = ?`, [articleId]);
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: '刪除文章失敗' });
-    }
-});
-
-/**
- * API: Get list of all unique names in database
- */
-app.get('/api/articles/names', async (req, res) => {
-    try {
-        const db = await loadArticlesDB();
-        const allNamesSet = new Set();
-        db.paragraphs.forEach(p => {
-            if (p.names && Array.isArray(p.names)) {
-                p.names.forEach(n => {
-                    const trimmed = n.trim();
-                    if (trimmed) allNamesSet.add(trimmed);
-                });
-            }
-        });
-        res.json({ names: Array.from(allNamesSet) });
-    } catch (e) {
-        res.status(500).json({ error: '讀取名字清單失敗' });
     }
 });
 
@@ -744,23 +821,31 @@ app.post('/api/articles/generate', async (req, res) => {
     const replacements = nameReplacements || {};
 
     try {
-        const db = await loadArticlesDB();
-        const allParagraphs = db.paragraphs;
+        const allParagraphs = await dbAll(`SELECT * FROM paragraphs`);
         if (!allParagraphs || allParagraphs.length === 0) {
-            return res.status(400).json({ error: '資料庫中沒有任何段落，請先匯入一些文章' });
+            return res.status(400).json({ error: '資料庫中沒有任何段落，請先匯入一些文章並點擊進行 AI 段落分析。' });
         }
 
+        const formattedParagraphs = allParagraphs.map(p => ({
+            id: p.id,
+            articleId: p.article_id,
+            content: p.content,
+            role: p.role,
+            names: JSON.parse(p.names),
+            seq: p.seq
+        }));
+
         // Group paragraphs by their roles
-        let qi = allParagraphs.filter(p => p.role === '起');
-        let cheng = allParagraphs.filter(p => p.role === '承');
-        let zhuan = allParagraphs.filter(p => p.role === '轉');
-        let he = allParagraphs.filter(p => p.role === '合');
+        let qi = formattedParagraphs.filter(p => p.role === '起');
+        let cheng = formattedParagraphs.filter(p => p.role === '承');
+        let zhuan = formattedParagraphs.filter(p => p.role === '轉');
+        let he = formattedParagraphs.filter(p => p.role === '合');
 
         // Fallbacks if any structural role is missing
-        if (qi.length === 0) qi = allParagraphs;
-        if (cheng.length === 0) cheng = allParagraphs;
-        if (zhuan.length === 0) zhuan = allParagraphs;
-        if (he.length === 0) he = allParagraphs;
+        if (qi.length === 0) qi = formattedParagraphs;
+        if (cheng.length === 0) cheng = formattedParagraphs;
+        if (zhuan.length === 0) zhuan = formattedParagraphs;
+        if (he.length === 0) he = formattedParagraphs;
 
         // Determine how many paragraphs to pick based on word count
         let chengCount = 1;
@@ -784,11 +869,8 @@ app.post('/api/articles/generate', async (req, res) => {
         };
 
         const selected = [];
-        // 1. Pick '起'
         selected.push(getRandomElement(qi));
-        // 2. Pick '承'
         selected.push(...getRandomElements(cheng, chengCount));
-        // 3. Pick '轉'
         selected.push(...getRandomElements(zhuan, zhuanCount));
         // 4. Pick '合'
         selected.push(getRandomElement(he));
