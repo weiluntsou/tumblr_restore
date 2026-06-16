@@ -26,6 +26,64 @@ let enableRandomIllustrations = true;
 let cachedImages = [];
 let currentReaderFontScale = 100; // Font size scale percentage (70% to 160%)
 
+// Global Traditional Chinese display state
+let globalTraditionalMode = localStorage.getItem('traditional_mode') === 'true';
+let currentOpenArticleId = null;
+
+function translateToTC(text) {
+    if (typeof OpenCC !== 'undefined' && text) {
+        const converter = OpenCC.Converter({ from: 'cn', to: 'tw' });
+        return converter(text);
+    }
+    return text || '';
+}
+
+function updateLangToggleButton(btn) {
+    if (globalTraditionalMode) {
+        btn.innerText = '繁體顯示: 開';
+        btn.classList.add('active');
+    } else {
+        btn.innerText = '繁體顯示: 關';
+        btn.classList.remove('active');
+    }
+}
+
+// Bind global lang toggle event
+document.addEventListener('DOMContentLoaded', () => {
+    const globalLangToggle = document.getElementById('globalLangToggle');
+    if (globalLangToggle) {
+        updateLangToggleButton(globalLangToggle);
+        
+        globalLangToggle.addEventListener('click', () => {
+            globalTraditionalMode = !globalTraditionalMode;
+            localStorage.setItem('traditional_mode', globalTraditionalMode);
+            updateLangToggleButton(globalLangToggle);
+            
+            // Re-render active list views
+            const activeTabBtn = document.querySelector('.tab-btn.active');
+            if (activeTabBtn) {
+                const target = activeTabBtn.dataset.tab;
+                if (target === 'library') {
+                    const activeSubTabBtn = document.querySelector('.sub-tab-btn.active');
+                    if (activeSubTabBtn) {
+                        const subTarget = activeSubTabBtn.dataset.subTab;
+                        if (subTarget === 'list') {
+                            fetchArticles();
+                        } else if (subTarget === 'generator') {
+                            loadUniqueNames();
+                        }
+                    }
+                }
+            }
+            
+            // If detail modal is open, refresh it dynamically
+            if (currentOpenArticleId) {
+                openArticleDetails(currentOpenArticleId);
+            }
+        });
+    }
+});
+
 async function fetchCachedImages() {
     try {
         const res = await fetch('/api/downloads');
@@ -764,14 +822,21 @@ function renderArticles(articles) {
         const wordCountText = isRaw ? '尚未分析' : `${art.wordCount} 字`;
         const paragraphCountText = isRaw ? '尚未分析' : `${art.paragraphCount} 個`;
         
+        let displayTitle = art.title;
+        let displayNames = art.names || [];
+        if (globalTraditionalMode) {
+            displayTitle = translateToTC(displayTitle);
+            displayNames = displayNames.map(name => translateToTC(name));
+        }
+        
         card.innerHTML = `
-            <h3>${escapeHtml(art.title)} ${statusBadge}</h3>
+            <h3>${escapeHtml(displayTitle)} ${statusBadge}</h3>
             <div class="article-meta-info">
                 <span>📅 儲存時間: ${dateStr}</span>
                 <span>📏 總字數: ${wordCountText} | 🧩 段落數: ${paragraphCountText}</span>
             </div>
             <div class="article-tags-names">
-                ${isRaw ? '<span style="color: var(--text-dim); font-size: 0.8rem; font-style: italic;">💡 請點擊此卡片，開啟後進行 AI 結構分析</span>' : (art.names || []).map(name => `<span class="name-tag">👤 ${escapeHtml(name)}</span>`).join('')}
+                ${isRaw ? '<span style="color: var(--text-dim); font-size: 0.8rem; font-style: italic;">💡 請點擊此卡片，開啟後進行 AI 結構分析</span>' : displayNames.map(name => `<span class="name-tag">👤 ${escapeHtml(name)}</span>`).join('')}
             </div>
             <button class="article-delete-btn" title="刪除文章">🗑️</button>
         `;
@@ -780,7 +845,7 @@ function renderArticles(articles) {
         const deleteBtn = card.querySelector('.article-delete-btn');
         deleteBtn.onclick = async (e) => {
             e.stopPropagation();
-            if (confirm(`確定要刪除文章「${art.title}」及其所有段落記錄嗎？`)) {
+            if (confirm(`確定要刪除文章「${displayTitle}」及其所有段落記錄嗎？`)) {
                 try {
                     const res = await fetch(`/api/articles/${art.id}`, { method: 'DELETE' });
                     const resData = await res.json();
@@ -806,6 +871,8 @@ function renderArticles(articles) {
 
 async function openArticleDetails(articleId) {
     try {
+        currentOpenArticleId = articleId;
+        
         // Fetch latest images for random illustrations
         await fetchCachedImages();
 
@@ -814,40 +881,87 @@ async function openArticleDetails(articleId) {
         
         const { article, paragraphs } = data;
         
-        // Create full detail layout
-        const modal = document.createElement('div');
-        modal.className = 'modal';
-        modal.id = 'articleDetailModal';
-        
-        const modalContent = document.createElement('div');
-        modalContent.className = 'modal-content glass article-detail-modal-content';
+        // Check if modal already exists to prevent duplicate modals and overlays
+        let modal = document.getElementById('articleDetailModal');
+        let modalContent;
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.id = 'articleDetailModal';
+            
+            modalContent = document.createElement('div');
+            modalContent.className = 'modal-content glass article-detail-modal-content';
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+        } else {
+            modalContent = modal.querySelector('.modal-content');
+        }
         
         const updateModalBody = (art, paras) => {
             const formattedDate = new Date(art.createdAt).toLocaleDateString('zh-TW');
             const innerIsRaw = art.status === 'raw';
             
+            // Clone or prepare display versions
+            let displayTitle = art.title;
+            let displayOriginalContent = art.originalContent;
+            let displayReformatted = art.reformatted;
+            let displayNames = art.names || [];
+            let displayParas = paras.map(p => ({
+                ...p,
+                content: p.content,
+                names: p.names ? [...p.names] : []
+            }));
+
+            if (globalTraditionalMode) {
+                displayTitle = translateToTC(displayTitle);
+                displayOriginalContent = translateToTC(displayOriginalContent);
+                displayReformatted = translateToTC(displayReformatted);
+                displayNames = displayNames.map(n => translateToTC(n));
+                displayParas.forEach(p => {
+                    p.content = translateToTC(p.content);
+                    p.names = p.names.map(n => translateToTC(n));
+                });
+            }
+
             let contentHtml = '';
             if (innerIsRaw) {
-                if (art.originalContent.length > 100000) {
-                    contentHtml = escapeHtml(art.originalContent.substring(0, 100000)) + 
-                        `\n\n<div class="truncated-notice" style="padding: 20px; background: rgba(255,255,255,0.02); border: 1px dashed var(--glass-border); border-radius: 8px; margin-top: 20px; text-align: center;">
-                            <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 12px; line-height: 1.5;">⚠️ 本文內容過長（共 ${art.originalContent.length.toLocaleString()} 字），已預載前 100,000 字以防網頁卡頓。</p>
-                            <button id="modalLoadAllBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-size: 0.8rem; padding: 8px 20px; border-radius: 6px; cursor: pointer;">載入剩餘全文</button>
-                         </div>`;
+                // Render paragraphs list in the left pane as p tags with index IDs
+                const pList = displayParas.map((p, i) => `<p id="reader-p-${i}" style="margin-bottom: 18px;">${escapeHtml(p.content)}</p>`).join('\n');
+                
+                if (displayOriginalContent.length > 100000) {
+                    let loadedCount = 0;
+                    let loadedHtml = '';
+                    for (let i = 0; i < displayParas.length; i++) {
+                        if (loadedCount + displayParas[i].content.length > 100000) {
+                            loadedHtml += `
+                                <div class="truncated-notice" style="padding: 20px; background: rgba(255,255,255,0.02); border: 1px dashed var(--glass-border); border-radius: 8px; margin-top: 20px; text-align: center;">
+                                    <p style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 12px; line-height: 1.5;">⚠️ 本文內容過長（共 ${displayOriginalContent.length.toLocaleString()} 字），已預載前部分內容以防網頁卡頓。</p>
+                                    <button id="modalLoadAllBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-size: 0.8rem; padding: 8px 20px; border-radius: 6px; cursor: pointer;">載入剩餘全文</button>
+                                </div>
+                            `;
+                            break;
+                        }
+                        loadedHtml += `<p id="reader-p-${i}" style="margin-bottom: 18px;">${escapeHtml(displayParas[i].content)}</p>\n`;
+                        loadedCount += displayParas[i].content.length;
+                    }
+                    contentHtml = loadedHtml;
                 } else {
-                    contentHtml = escapeHtml(art.originalContent);
+                    contentHtml = pList;
                 }
             } else {
-                contentHtml = enableRandomIllustrations ? renderMarkdownWithImages(art.reformatted, cachedImages) : renderMarkdown(art.reformatted);
+                contentHtml = enableRandomIllustrations ? renderMarkdownWithImages(displayReformatted, cachedImages) : renderMarkdown(displayReformatted);
             }
             
             modalContent.innerHTML = `
                 <div class="modal-header-bar" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); padding-bottom: 12px; margin-bottom: 15px; flex-shrink: 0; gap: 15px; width: 100%;">
                     <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1;">
                         <span class="close-btn" id="closeDetailBtnMobile" style="font-size: 1.8rem; cursor: pointer; line-height: 1; padding: 0 5px;">&larr;</span>
-                        <h2 style="margin: 0; font-weight: 600; font-size: 1.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(art.title)}</h2>
+                        <h2 style="margin: 0; font-weight: 600; font-size: 1.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(displayTitle)}</h2>
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                        <!-- Simplified to Traditional button -->
+                        <button id="modalTranslateBtn" style="background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); color: var(--text); padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; cursor: pointer; font-weight: bold; transition: all 0.2s;">🇹🇼 轉繁體</button>
+                        
                         <div class="font-size-adjuster" style="display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); padding: 2px 8px; border-radius: 20px;">
                             <button id="fontDecBtn" style="background: none; border: none; color: var(--text); cursor: pointer; font-size: 0.75rem; font-weight: bold; padding: 2px 5px;">A-</button>
                             <span id="fontSizeDisplay" style="font-size: 0.7rem; color: var(--text-dim); min-width: 32px; text-align: center; font-weight: bold;">${currentReaderFontScale}%</span>
@@ -863,14 +977,14 @@ async function openArticleDetails(articleId) {
 
                 <div class="modal-tab-bar" style="width: 100%; gap: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--glass-border); padding-bottom: 8px; flex-shrink: 0;">
                     <button id="modalTabRead" class="sub-tab-btn active" style="flex: 1; padding: 8px 0; border-radius: 6px; font-weight: bold;">📖 閱讀排版</button>
-                    <button id="modalTabParas" class="sub-tab-btn" style="flex: 1; padding: 8px 0; border-radius: 6px; font-weight: bold;">🧩 段落清單 (${paras.length})</button>
+                    <button id="modalTabParas" class="sub-tab-btn" style="flex: 1; padding: 8px 0; border-radius: 6px; font-weight: bold;">🧩 段落清單 (${displayParas.length})</button>
                 </div>
 
                 <div class="preview-layout" style="width: 100%; min-height: 0;">
                     <div class="preview-column active-tab" style="height: 100%;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0; width: 100%;">
                             <h3 style="margin: 0; font-size: 1rem;">排版內容</h3>
-                            <span style="color: var(--text-dim); font-size: 0.75rem;">儲存日期: ${formattedDate} | 人物: ${innerIsRaw ? '尚未分析' : (art.names || []).join('、') || '無'}</span>
+                            <span style="color: var(--text-dim); font-size: 0.75rem;">儲存日期: ${formattedDate} | 人物: ${innerIsRaw ? '尚未分析' : displayNames.join('、') || '無'}</span>
                         </div>
                         <div class="reformatted-content-view" id="modalContentView" style="white-space: ${innerIsRaw ? 'pre-wrap' : 'normal'};">
                             ${contentHtml}
@@ -879,48 +993,47 @@ async function openArticleDetails(articleId) {
                     
                     <div class="preview-column" id="modalRightColumn" style="height: 100%;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-shrink: 0; width: 100%;">
-                            <h3 style="margin: 0; font-size: 1rem;">段落細節紀錄 (${paras.length})</h3>
+                            <h3 style="margin: 0; font-size: 1rem;">段落細節 (${displayParas.length})</h3>
                             ${innerIsRaw ? `
-                                <button id="libStartAnalysisBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-weight: bold; padding: 4px 10px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; margin: 0;">🤖 AI 優化角色與人名</button>
+                                <button id="libStartAnalysisBtn" class="primary-btn" style="background: linear-gradient(135deg, #3b82f6, #2563eb); font-weight: bold; padding: 4px 10px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; margin: 0;">🤖 AI 優化</button>
                             ` : ''}
                         </div>
                         ${innerIsRaw ? `<div id="libAnalysisModalStatus" class="status-msg" style="margin-bottom: 10px; font-size: 0.8rem; display: none;"></div>` : ''}
-                            <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
-                                ${(() => {
-                                    let rightColHtml = '';
-                                    // Limit right column images to max 4 to keep list clean and responsive
-                                    const maxRightImages = Math.min(4, cachedImages.length);
-                                    const shuffledImagesRight = [...cachedImages].sort(() => 0.5 - Math.random()).slice(0, maxRightImages);
-                                    const stepRight = Math.max(2, Math.floor(paras.length / (maxRightImages + 1)));
-                                    let imgIndexRight = 0;
+                        <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
+                            ${(() => {
+                                let rightColHtml = '';
+                                // Limit right column images to max 4 to keep list clean and responsive
+                                const maxRightImages = Math.min(4, cachedImages.length);
+                                const shuffledImagesRight = [...cachedImages].sort(() => 0.5 - Math.random()).slice(0, maxRightImages);
+                                const stepRight = Math.max(2, Math.floor(displayParas.length / (maxRightImages + 1)));
+                                let imgIndexRight = 0;
+                                
+                                displayParas.forEach((p, i) => {
+                                    rightColHtml += `
+                                        <div class="paragraph-analysis-card paragraph-trigger-card" data-idx="${i}" style="cursor: pointer;">
+                                            <div class="paragraph-analysis-header">
+                                                <span>段落 #${i+1}</span>
+                                                <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
+                                            </div>
+                                            <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
+                                            <div style="font-size: 0.75rem; color: var(--text-dim);">
+                                                👤 人物: ${(p.names || []).join('、') || '無'}
+                                            </div>
+                                        </div>
+                                    `;
                                     
-                                    paras.forEach((p, i) => {
+                                    if (enableRandomIllustrations && (i + 1) % stepRight === 0 && imgIndexRight < shuffledImagesRight.length) {
+                                        const img = shuffledImagesRight[imgIndexRight++];
                                         rightColHtml += `
-                                            <div class="paragraph-analysis-card">
-                                                <div class="paragraph-analysis-header">
-                                                    <span>段落 #${i+1}</span>
-                                                    <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
-                                                </div>
-                                                <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
-                                                <div style="font-size: 0.75rem; color: var(--text-dim);">
-                                                    👤 人物: ${(p.names || []).join('、') || '無'}
-                                                </div>
+                                            <div class="paragraph-analysis-card style-placeholder" style="padding: 10px; text-align: center; border: 1px dashed var(--glass-border); border-radius: 6px; pointer-events: none;">
+                                                <img src="${img.url}" style="max-width: 100%; max-height: 150px; border-radius: 6px; object-fit: cover;">
+                                                <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 5px;">🖼️ 圖片庫插圖</div>
                                             </div>
                                         `;
-                                        
-                                        if (enableRandomIllustrations && (i + 1) % stepRight === 0 && imgIndexRight < shuffledImagesRight.length) {
-                                            const img = shuffledImagesRight[imgIndexRight++];
-                                            rightColHtml += `
-                                                <div class="paragraph-analysis-card" style="padding: 10px; text-align: center; cursor: pointer; border: 1px dashed var(--glass-border);" onclick="openViewer({ type: 'image', url: '${img.url}' })">
-                                                    <img src="${img.url}" style="max-width: 100%; max-height: 150px; border-radius: 6px; object-fit: cover;">
-                                                    <div style="font-size: 0.7rem; color: var(--text-dim); margin-top: 5px;">🖼️ 圖片庫插圖</div>
-                                                </div>
-                                            `;
-                                        }
-                                    });
-                                    return rightColHtml;
-                                })()}
-                            </div>
+                                    }
+                                });
+                                return rightColHtml;
+                            })()}
                         </div>
                     </div>
                 </div>
@@ -944,10 +1057,75 @@ async function openArticleDetails(articleId) {
                 loadAllBtn.onclick = () => {
                     const contentView = modalContent.querySelector('#modalContentView');
                     if (contentView) {
-                        contentView.innerHTML = escapeHtml(art.originalContent);
+                        contentView.innerHTML = escapeHtml(displayOriginalContent);
                     }
                 };
             }
+
+            // Re-bind Traditional Chinese conversion button
+            const translateBtn = modalContent.querySelector('#modalTranslateBtn');
+            if (translateBtn) {
+                if (globalTraditionalMode) {
+                    translateBtn.innerText = '✓ 已轉繁體';
+                    translateBtn.style.borderColor = 'rgba(74, 222, 128, 0.4)';
+                    translateBtn.style.color = '#4ade80';
+                } else {
+                    translateBtn.innerText = '🇹🇼 轉繁體';
+                    translateBtn.style.borderColor = 'var(--glass-border)';
+                    translateBtn.style.color = 'var(--text-main)';
+                }
+                
+                translateBtn.onclick = () => {
+                    globalTraditionalMode = !globalTraditionalMode;
+                    localStorage.setItem('traditional_mode', globalTraditionalMode);
+                    
+                    // Update global button in header
+                    const globalToggle = document.getElementById('globalLangToggle');
+                    if (globalToggle) {
+                        updateLangToggleButton(globalToggle);
+                    }
+                    
+                    // Refresh modal dynamically
+                    openArticleDetails(articleId);
+                };
+            }
+
+            // Re-bind paragraph click-to-scroll targeting
+            const cards = modalContent.querySelectorAll('.paragraph-trigger-card');
+            cards.forEach(card => {
+                card.onclick = () => {
+                    const idx = card.dataset.idx;
+                    const targetEl = modalContent.querySelector(`#reader-p-${idx}`);
+                    if (targetEl && contentView) {
+                        // Switch view tab
+                        const tabRead = modalContent.querySelector('#modalTabRead');
+                        const tabParas = modalContent.querySelector('#modalTabParas');
+                        const colLeft = modalContent.querySelector('.preview-column:first-child');
+                        const colRight = modalContent.querySelector('#modalRightColumn');
+                        
+                        if (tabRead && tabParas && colLeft && colRight && colRight.classList.contains('active-tab')) {
+                            tabRead.classList.add('active');
+                            tabParas.classList.remove('active');
+                            colLeft.classList.add('active-tab');
+                            colRight.classList.remove('active-tab');
+                        }
+
+                        // Smoothly scroll the left view column to targeted paragraph
+                        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        
+                        // Briefly highlight text backer color for focus
+                        targetEl.style.transition = 'background 0.3s ease, padding 0.3s ease, border-radius 0.3s ease';
+                        const originalBg = targetEl.style.background;
+                        targetEl.style.background = 'rgba(59, 130, 246, 0.2)';
+                        targetEl.style.borderRadius = '6px';
+                        targetEl.style.padding = '4px 8px';
+                        setTimeout(() => {
+                            targetEl.style.background = originalBg;
+                            targetEl.style.padding = '0';
+                        }, 2000);
+                    }
+                };
+            });
 
             // Re-bind font scale adjuster
             const decBtn = modalContent.querySelector('#fontDecBtn');
@@ -970,7 +1148,7 @@ async function openArticleDetails(articleId) {
                 };
             }
 
-            // Re-bind mobile tabs switching
+            // Re-bind tabs switching
             const tabRead = modalContent.querySelector('#modalTabRead');
             const tabParas = modalContent.querySelector('#modalTabParas');
             const colLeft = modalContent.querySelector('.preview-column:first-child');
@@ -1053,6 +1231,7 @@ async function openArticleDetails(articleId) {
         
         const closeModal = () => {
             modal.remove();
+            currentOpenArticleId = null;
         };
         
         modal.appendChild(modalContent);
@@ -1196,7 +1375,11 @@ if (libGenerateBtn) {
                 await fetchCachedImages();
 
                 const updateGenResult = () => {
-                    libGenResultBody.innerHTML = enableRandomIllustrations ? renderMarkdownWithImages(data.article, cachedImages) : renderMarkdown(data.article);
+                    let displayArticle = data.article;
+                    if (globalTraditionalMode) {
+                        displayArticle = translateToTC(displayArticle);
+                    }
+                    libGenResultBody.innerHTML = enableRandomIllustrations ? renderMarkdownWithImages(displayArticle, cachedImages) : renderMarkdown(displayArticle);
                 };
 
                 updateGenResult();
@@ -1217,7 +1400,11 @@ if (libGenerateBtn) {
                 
                 // Set text content for copy action
                 libGenCopyBtn.onclick = () => {
-                    navigator.clipboard.writeText(data.article)
+                    let textToCopy = data.article;
+                    if (globalTraditionalMode) {
+                        textToCopy = translateToTC(textToCopy);
+                    }
+                    navigator.clipboard.writeText(textToCopy)
                         .then(() => alert('已複製生成的文章！'))
                         .catch(() => alert('複製失敗'));
                 };
@@ -1265,6 +1452,7 @@ function renderMarkdown(md) {
     
     // Paragraphs
     const lines = escaped.split('\n\n');
+    let pIdx = 0;
     const processed = lines.map(line => {
         const trimmed = line.trim();
         if (trimmed.startsWith('&lt;h') || trimmed.startsWith('<h') || trimmed.startsWith('&lt;hr') || trimmed.startsWith('<hr')) {
@@ -1272,7 +1460,7 @@ function renderMarkdown(md) {
             return trimmed.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
         }
         if (trimmed) {
-            return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+            return `<p id="reader-p-${pIdx++}">${trimmed.replace(/\n/g, '<br>')}</p>`;
         }
         return '';
     });

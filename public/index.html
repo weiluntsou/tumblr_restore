@@ -12,7 +12,10 @@
 <body>
     <div class="background-glow"></div>
     <div class="container">
-        <header>
+        <header style="position: relative;">
+            <div class="global-lang-toggle-container" style="position: absolute; top: 0; right: 0; z-index: 10;">
+                <button id="globalLangToggle" class="lang-toggle-btn">繁體顯示: 關</button>
+            </div>
             <h1>Tumblr <span class="highlight">Restore</span></h1>
             <p>輕鬆存取 Tumblr 貼文中的高品質圖片與影片</p>
         </header>
@@ -211,6 +214,7 @@
             <p>&copy; 2026 Tumblr Restore Tool. 把回憶留在身邊。</p>
         </footer>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/opencc-js@1.3.1/dist/umd/cn2t.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
