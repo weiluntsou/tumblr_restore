@@ -29,7 +29,14 @@ async function fetchCachedImages() {
     try {
         const res = await fetch('/api/downloads');
         const data = await res.json();
-        cachedImages = data.files.filter(f => f.type === 'image');
+        // strict filter to only allow standard lightweight images, excluding video formats like gifv/mp4
+        const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+        cachedImages = data.files.filter(f => {
+            const extIdx = f.name.lastIndexOf('.');
+            if (extIdx === -1) return false;
+            const ext = f.name.substring(extIdx).toLowerCase();
+            return allowedExtensions.includes(ext);
+        });
     } catch (e) {
         console.error('Failed to load images for illustration', e);
         cachedImages = [];
@@ -43,9 +50,15 @@ function renderMarkdownWithImages(md, images) {
     const paragraphs = html.split('</p>');
     if (paragraphs.length <= 1) return html;
 
+    // Limit maximum inserted images to 6 to prevent OOM/render lag in extremely long posts
+    const maxImages = Math.min(6, images.length);
+    const shuffledImages = [...images].sort(() => 0.5 - Math.random()).slice(0, maxImages);
+
+    // Calculate step interval to distribute images evenly throughout the post
+    const step = Math.max(2, Math.floor(paragraphs.length / (maxImages + 1)));
+
     let newHtml = '';
     let imgIndex = 0;
-    const shuffledImages = [...images].sort(() => 0.5 - Math.random());
 
     paragraphs.forEach((p, idx) => {
         if (idx === paragraphs.length - 1) {
@@ -54,7 +67,7 @@ function renderMarkdownWithImages(md, images) {
         }
         newHtml += p + '</p>';
 
-        if ((idx + 1) % 2 === 0 && imgIndex < shuffledImages.length) {
+        if ((idx + 1) % step === 0 && imgIndex < shuffledImages.length) {
             const img = shuffledImages[imgIndex++];
             newHtml += `
                 <div class="article-inline-image-container">
@@ -264,13 +277,29 @@ function renderMedia(items) {
             div.appendChild(img);
         } else if (item.type === 'video') {
             const video = document.createElement('video');
-            video.src = item.url;
+            video.preload = 'none';
             video.muted = true;
             video.loop = true;
+            video.dataset.src = item.url;
             div.appendChild(video);
             
-            div.onmouseover = () => video.play();
-            div.onmouseout = () => { video.pause(); video.currentTime = 0; };
+            const playOverlay = document.createElement('div');
+            playOverlay.className = 'play-overlay';
+            playOverlay.innerHTML = '▶';
+            div.appendChild(playOverlay);
+            
+            div.onmouseover = () => {
+                playOverlay.style.opacity = '0';
+                if (!video.src) {
+                    video.src = video.dataset.src;
+                }
+                video.play().catch(err => console.warn('Video play failed:', err.message));
+            };
+            div.onmouseout = () => {
+                playOverlay.style.opacity = '1';
+                video.pause();
+                try { video.currentTime = 0; } catch (err) {}
+            };
         } else if (item.type === 'audio') {
             const audioIcon = document.createElement('div');
             audioIcon.style.cssText = 'height:100%; display:flex; align-items:center; justify-content:center; font-size:3rem;';
@@ -540,11 +569,29 @@ function renderHistory(files) {
             div.appendChild(img);
         } else if (file.type === 'video') {
             const video = document.createElement('video');
-            video.src = file.url;
+            video.preload = 'none';
             video.muted = true;
+            video.loop = true;
+            video.dataset.src = file.url;
             div.appendChild(video);
-            div.onmouseover = () => video.play();
-            div.onmouseout = () => { video.pause(); video.currentTime = 0; };
+            
+            const playOverlay = document.createElement('div');
+            playOverlay.className = 'play-overlay';
+            playOverlay.innerHTML = '▶';
+            div.appendChild(playOverlay);
+            
+            div.onmouseover = () => {
+                playOverlay.style.opacity = '0';
+                if (!video.src) {
+                    video.src = video.dataset.src;
+                }
+                video.play().catch(err => console.warn('Video play failed:', err.message));
+            };
+            div.onmouseout = () => {
+                playOverlay.style.opacity = '1';
+                video.pause();
+                try { video.currentTime = 0; } catch (err) {}
+            };
         } else if (file.type === 'audio') {
             const audioIcon = document.createElement('div');
             audioIcon.style.cssText = 'height:100%; display:flex; align-items:center; justify-content:center; font-size:3rem;';
@@ -815,8 +862,11 @@ async function openArticleDetails(articleId) {
                                 <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
                                     ${(() => {
                                         let rightColHtml = '';
+                                        // Limit right column images to max 4 to keep list clean and responsive
+                                        const maxRightImages = Math.min(4, cachedImages.length);
+                                        const shuffledImagesRight = [...cachedImages].sort(() => 0.5 - Math.random()).slice(0, maxRightImages);
+                                        const stepRight = Math.max(2, Math.floor(paras.length / (maxRightImages + 1)));
                                         let imgIndexRight = 0;
-                                        const shuffledImagesRight = [...cachedImages].sort(() => 0.5 - Math.random());
                                         
                                         paras.forEach((p, i) => {
                                             rightColHtml += `
@@ -832,7 +882,7 @@ async function openArticleDetails(articleId) {
                                                 </div>
                                             `;
                                             
-                                            if (enableRandomIllustrations && (i + 1) % 2 === 0 && imgIndexRight < shuffledImagesRight.length) {
+                                            if (enableRandomIllustrations && (i + 1) % stepRight === 0 && imgIndexRight < shuffledImagesRight.length) {
                                                 const img = shuffledImagesRight[imgIndexRight++];
                                                 rightColHtml += `
                                                     <div class="paragraph-analysis-card" style="padding: 10px; text-align: center; cursor: pointer; border: 1px dashed var(--glass-border);" onclick="openViewer({ type: 'image', url: '${img.url}' })">
