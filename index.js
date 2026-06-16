@@ -19,7 +19,7 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
 
 // Ensure settings file exists
 if (!fs.existsSync(SETTINGS_FILE)) {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ cookies: '' }));
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ cookies: '', geminiApiKey: '', geminiModel: 'gemini-3.1-flash-lite' }, null, 2));
 }
 
 /**
@@ -27,7 +27,13 @@ if (!fs.existsSync(SETTINGS_FILE)) {
  */
 async function getSettings() {
     const data = await fs.promises.readFile(SETTINGS_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    return {
+        cookies: '',
+        geminiApiKey: '',
+        geminiModel: 'gemini-3.1-flash-lite',
+        ...parsed
+    };
 }
 
 app.use(morgan('dev'));
@@ -47,8 +53,15 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
     try {
-        const { cookies } = req.body;
-        await fs.promises.writeFile(SETTINGS_FILE, JSON.stringify({ cookies }, null, 2));
+        const { cookies, geminiApiKey, geminiModel } = req.body;
+        const current = await getSettings();
+        const updated = {
+            ...current,
+            cookies: cookies !== undefined ? cookies : current.cookies,
+            geminiApiKey: geminiApiKey !== undefined ? geminiApiKey : current.geminiApiKey,
+            geminiModel: geminiModel !== undefined ? geminiModel : current.geminiModel,
+        };
+        await fs.promises.writeFile(SETTINGS_FILE, JSON.stringify(updated, null, 2));
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: 'Failed to save settings' });
@@ -338,6 +351,352 @@ app.delete('/api/downloads/:filename', async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete file' });
+    }
+});
+
+// ─── Article Library & Paragraph Database ───────────────────────
+const DATA_DIR = path.join(__dirname, 'data');
+const ARTICLES_FILE = path.join(DATA_DIR, 'articles.json');
+
+// Ensure data folder and database file exist
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+if (!fs.existsSync(ARTICLES_FILE)) {
+    fs.writeFileSync(ARTICLES_FILE, JSON.stringify({ articles: [], paragraphs: [] }, null, 2));
+}
+
+async function loadArticlesDB() {
+    try {
+        const data = await fs.promises.readFile(ARTICLES_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (e) {
+        return { articles: [], paragraphs: [] };
+    }
+}
+
+async function saveArticlesDB(db) {
+    await fs.promises.writeFile(ARTICLES_FILE, JSON.stringify(db, null, 2), 'utf8');
+}
+
+/**
+ * Universal Gemini API call wrapper
+ */
+async function callGemini(prompt, responseJson = false) {
+    const settings = await getSettings();
+    const apiKey = settings.geminiApiKey;
+    if (!apiKey) {
+        throw new Error('請先在系統設定中填寫 Gemini API 金鑰');
+    }
+    const model = settings.geminiModel || 'gemini-3.1-flash-lite';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const generationConfig = {
+        temperature: 0.3
+    };
+    if (responseJson) {
+        generationConfig.responseMimeType = 'application/json';
+    }
+
+    const payload = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig
+    };
+
+    const response = await axios.post(url, payload, {
+        headers: { 'Content-Type': 'application/json' }
+    });
+
+    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+        throw new Error('Gemini API 未回傳有效內容');
+    }
+    return text.trim();
+}
+
+/**
+ * API: Reformat pasted article, segment into paragraphs, detect roles (起承轉合), extract names
+ */
+app.post('/api/articles/reformat', async (req, res) => {
+    const { content } = req.body;
+    if (!content) {
+        return res.status(400).json({ error: '請提供文章內容' });
+    }
+
+    try {
+        const prompt = `你是一個專業的文章排版與分析助手。請分析以下貼入的文章，並將其處理成結構化的 JSON 格式。
+
+處理要求：
+1. **重新排版**：將整篇文章排版成易於閱讀的格式（使用 Markdown），修正錯誤的標點符號，並保留語意通順。
+2. **段落切割與角色分類**：依語意將文章切分成數個段落。對於每個段落，根據其在文章結構中的角色，將其分類為：
+   - 「起」：引導、開端、介紹背景或人物。
+   - 「承」：延續開端、展開敘事、補充細節。
+   - 「轉」：轉折、情節起伏、引入衝突或改變視角。
+   - 「合」：收尾、總結、得出結論或情感昇華。
+3. **人名辨識**：在每個段落中，找出所有出現的「真實人名」或「角色名字」（如「張三」、「王五」、「John」等），若無人名則留空陣列。
+
+請嚴格以 JSON 格式回傳，結構如下，不要包含任何 markdown code block (如 \`\`\`json)：
+{
+  "title": "請提供一個適合的文章標題（如果原文章無標題則自動擬定）",
+  "reformatted": "排版後的完整 Markdown 文章內容",
+  "paragraphs": [
+    {
+      "content": "此段落的文字內容（排版後）",
+      "role": "起 或 承 或 轉 或 合",
+      "names": ["段落中出現的人名列表，例如 ['張三']"]
+    }
+  ]
+}
+
+原文章內容：
+${content}`;
+
+        const responseText = await callGemini(prompt, true);
+        
+        let cleaned = responseText;
+        if (cleaned.startsWith('```')) {
+            cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        }
+        
+        const result = JSON.parse(cleaned);
+        res.json(result);
+    } catch (e) {
+        console.error('Reformat error:', e);
+        res.status(500).json({ error: '排版文章時發生錯誤: ' + e.message });
+    }
+});
+
+/**
+ * API: Save article and paragraphs into database
+ */
+app.post('/api/articles/save', async (req, res) => {
+    const { title, originalContent, reformatted, paragraphs } = req.body;
+    if (!originalContent || !paragraphs || !Array.isArray(paragraphs)) {
+        return res.status(400).json({ error: '無效的儲存資料' });
+    }
+
+    try {
+        const db = await loadArticlesDB();
+        const articleId = `art_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        
+        // Collect all unique names in this article
+        const allNamesSet = new Set();
+        paragraphs.forEach(p => {
+            if (p.names && Array.isArray(p.names)) {
+                p.names.forEach(n => {
+                    const trimmed = n.trim();
+                    if (trimmed) allNamesSet.add(trimmed);
+                });
+            }
+        });
+        const allNames = Array.from(allNamesSet);
+
+        // Create article record
+        const newArticle = {
+            id: articleId,
+            title: title || `未命名文章 - ${new Date().toLocaleDateString('zh-TW')}`,
+            originalContent,
+            reformatted: reformatted || '',
+            names: allNames,
+            createdAt: new Date().toISOString()
+        };
+
+        // Create paragraphs records
+        const newParagraphs = paragraphs.map((p, idx) => ({
+            id: `par_${Date.now()}_${idx}_${Math.random().toString(36).substring(7)}`,
+            articleId,
+            content: p.content || '',
+            role: p.role || '承',
+            names: p.names || [],
+            seq: idx
+        }));
+
+        db.articles.push(newArticle);
+        db.paragraphs.push(...newParagraphs);
+        
+        await saveArticlesDB(db);
+        
+        res.json({ success: true, articleId, title: newArticle.title });
+    } catch (e) {
+        console.error('Save article error:', e);
+        res.status(500).json({ error: '儲存文章時發生錯誤: ' + e.message });
+    }
+});
+
+/**
+ * API: Get list of articles
+ */
+app.get('/api/articles', async (req, res) => {
+    try {
+        const db = await loadArticlesDB();
+        const list = db.articles.map(art => {
+            const artParagraphs = db.paragraphs.filter(p => p.articleId === art.id);
+            return {
+                id: art.id,
+                title: art.title,
+                createdAt: art.createdAt,
+                names: art.names || [],
+                wordCount: art.reformatted ? art.reformatted.length : 0,
+                paragraphCount: artParagraphs.length
+            };
+        });
+        list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        res.json({ articles: list });
+    } catch (e) {
+        res.status(500).json({ error: '無法讀取文章列表' });
+    }
+});
+
+/**
+ * API: Get specific article detail and its paragraphs
+ */
+app.get('/api/articles/:id', async (req, res) => {
+    try {
+        const db = await loadArticlesDB();
+        const article = db.articles.find(art => art.id === req.params.id);
+        if (!article) {
+            return res.status(404).json({ error: '找不到該文章' });
+        }
+        const paragraphs = db.paragraphs
+            .filter(p => p.articleId === article.id)
+            .sort((a, b) => a.seq - b.seq);
+            
+        res.json({ article, paragraphs });
+    } catch (e) {
+        res.status(500).json({ error: '無法讀取文章內容' });
+    }
+});
+
+/**
+ * API: Delete specific article and its paragraphs
+ */
+app.delete('/api/articles/:id', async (req, res) => {
+    try {
+        const db = await loadArticlesDB();
+        const articleId = req.params.id;
+        
+        db.articles = db.articles.filter(art => art.id !== articleId);
+        db.paragraphs = db.paragraphs.filter(p => p.articleId !== articleId);
+        
+        await saveArticlesDB(db);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: '刪除文章失敗' });
+    }
+});
+
+/**
+ * API: Get list of all unique names in database
+ */
+app.get('/api/articles/names', async (req, res) => {
+    try {
+        const db = await loadArticlesDB();
+        const allNamesSet = new Set();
+        db.paragraphs.forEach(p => {
+            if (p.names && Array.isArray(p.names)) {
+                p.names.forEach(n => {
+                    const trimmed = n.trim();
+                    if (trimmed) allNamesSet.add(trimmed);
+                });
+            }
+        });
+        res.json({ names: Array.from(allNamesSet) });
+    } catch (e) {
+        res.status(500).json({ error: '讀取名字清單失敗' });
+    }
+});
+
+/**
+ * API: Reassemble paragraphs and generate a new article with logical transition rewrites and name replacements
+ */
+app.post('/api/articles/generate', async (req, res) => {
+    const { targetWordCount, nameReplacements } = req.body;
+    const wordCount = parseInt(targetWordCount) || 500;
+    const replacements = nameReplacements || {};
+
+    try {
+        const db = await loadArticlesDB();
+        const allParagraphs = db.paragraphs;
+        if (!allParagraphs || allParagraphs.length === 0) {
+            return res.status(400).json({ error: '資料庫中沒有任何段落，請先匯入一些文章' });
+        }
+
+        // Group paragraphs by their roles
+        let qi = allParagraphs.filter(p => p.role === '起');
+        let cheng = allParagraphs.filter(p => p.role === '承');
+        let zhuan = allParagraphs.filter(p => p.role === '轉');
+        let he = allParagraphs.filter(p => p.role === '合');
+
+        // Fallbacks if any structural role is missing
+        if (qi.length === 0) qi = allParagraphs;
+        if (cheng.length === 0) cheng = allParagraphs;
+        if (zhuan.length === 0) zhuan = allParagraphs;
+        if (he.length === 0) he = allParagraphs;
+
+        // Determine how many paragraphs to pick based on word count
+        let chengCount = 1;
+        let zhuanCount = 1;
+        
+        if (wordCount >= 1200) {
+            chengCount = 3;
+            zhuanCount = 2;
+        } else if (wordCount >= 800) {
+            chengCount = 2;
+            zhuanCount = 2;
+        } else if (wordCount >= 500) {
+            chengCount = 2;
+            zhuanCount = 1;
+        }
+
+        const getRandomElement = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        const getRandomElements = (arr, count) => {
+            const shuffled = [...arr].sort(() => 0.5 - Math.random());
+            return shuffled.slice(0, count);
+        };
+
+        const selected = [];
+        // 1. Pick '起'
+        selected.push(getRandomElement(qi));
+        // 2. Pick '承'
+        selected.push(...getRandomElements(cheng, chengCount));
+        // 3. Pick '轉'
+        selected.push(...getRandomElements(zhuan, zhuanCount));
+        // 4. Pick '合'
+        selected.push(getRandomElement(he));
+
+        // Format selected paragraphs and perform initial name replacement
+        let reassembledText = '';
+        selected.forEach((p, idx) => {
+            let content = p.content;
+            for (const [oldName, newName] of Object.entries(replacements)) {
+                if (newName && newName.trim() && oldName !== newName) {
+                    const escName = oldName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                    const regex = new RegExp(escName, 'g');
+                    content = content.replace(regex, newName.trim());
+                }
+            }
+            reassembledText += `段落 ${idx + 1} (角色: ${p.role || '承'}):\n${content}\n\n`;
+        });
+
+        const prompt = `你是一個優秀的小說與文章寫作大師。
+我有幾段隨機挑選自資料庫的段落，它們已經被標示了在文章結構中的角色（起、承、轉、合）。
+請你將這些段落融合成一篇結構完整、邏輯連貫、情節流暢的文章。
+
+融合要求：
+1. **符合起承轉合**：文章結構必須符合「起（開端引入）」->「承（延續發展）」->「轉（轉折衝突）」->「合（收尾總結）」的敘事邏輯。
+2. **段落合理補寫**：在原本的段落之間，補寫必要的「過渡句」或「銜接情節」，讓原本不相關的段落串接得極其自然，如同原本就是同一篇文章。
+3. **名字一致性**：確保段落中所有人物姓名保持一致，不要搞混人名。
+4. **目標字數**：整篇文章的字數目標約為 ${wordCount} 字左右。
+5. **格式**：請以 Markdown 格式輸出，只回傳排版後的最終文章內容。
+
+以下是隨機挑選的段落內容：
+${reassembledText}`;
+
+        const generatedArticle = await callGemini(prompt, false);
+        res.json({ success: true, article: generatedArticle });
+    } catch (e) {
+        console.error('Generate article error:', e);
+        res.status(500).json({ error: '重組生成文章時發生錯誤: ' + e.message });
     }
 });
 

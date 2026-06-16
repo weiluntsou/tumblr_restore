@@ -391,6 +391,8 @@ window.onclick = (event) => {
 
 // Settings Elements
 const cookieInput = document.getElementById('cookieInput');
+const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
+const geminiModelInput = document.getElementById('geminiModelInput');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 
 // Tab Switching
@@ -418,6 +420,8 @@ tabBtns.forEach(btn => {
             fetchHistory();
         } else if (target === 'settings') {
             loadSettings();
+        } else if (target === 'library') {
+            initLibrary();
         }
     });
 });
@@ -427,6 +431,8 @@ async function loadSettings() {
         const response = await fetch('/api/settings');
         const data = await response.json();
         cookieInput.value = data.cookies || '';
+        if (geminiApiKeyInput) geminiApiKeyInput.value = data.geminiApiKey || '';
+        if (geminiModelInput) geminiModelInput.value = data.geminiModel || 'gemini-3.1-flash-lite';
     } catch (err) {
         console.error('Failed to load settings');
     }
@@ -438,7 +444,11 @@ saveSettingsBtn.addEventListener('click', async () => {
         const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cookies: cookieInput.value })
+            body: JSON.stringify({
+                cookies: cookieInput.value,
+                geminiApiKey: geminiApiKeyInput ? geminiApiKeyInput.value.trim() : '',
+                geminiModel: geminiModelInput ? geminiModelInput.value.trim() : 'gemini-3.1-flash-lite'
+            })
         });
         const data = await response.json();
         if (data.success) {
@@ -575,4 +585,444 @@ function renderProgress(results) {
         div.appendChild(statusSpan);
         progressList.appendChild(div);
     });
+}
+
+// ─── Article Library Frontend Logic ─────────────────────────────
+let libraryInitialized = false;
+let reformatData = null; // Stores parsed reformat result temporarily before saving
+
+function initLibrary() {
+    if (libraryInitialized) {
+        fetchArticles();
+        return;
+    }
+    libraryInitialized = true;
+    
+    // 1. Setup Sub Tabs Navigation
+    const subTabBtns = document.querySelectorAll('.sub-tab-btn');
+    const subTabContents = document.querySelectorAll('.sub-tab-content');
+    
+    subTabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.subTab;
+            subTabBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            subTabContents.forEach(content => {
+                if (content.id === `lib${target.charAt(0).toUpperCase() + target.slice(1)}Panel`) {
+                    content.classList.remove('hidden');
+                } else {
+                    content.classList.add('hidden');
+                }
+            });
+
+            if (target === 'list') {
+                fetchArticles();
+            } else if (target === 'generator') {
+                loadUniqueNames();
+            }
+        });
+    });
+
+    const refreshLibraryBtn = document.getElementById('refreshLibrary');
+    if (refreshLibraryBtn) {
+        refreshLibraryBtn.onclick = () => fetchArticles();
+    }
+
+    // Load initial list
+    fetchArticles();
+}
+
+// ─── Article List Logic ───
+async function fetchArticles() {
+    const container = document.getElementById('articleListContainer');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-state">載入中...</div>';
+    
+    try {
+        const response = await fetch('/api/articles');
+        const data = await response.json();
+        renderArticles(data.articles);
+    } catch (e) {
+        container.innerHTML = '<div class="loading-state status-error">無法讀取文章清單</div>';
+    }
+}
+
+function renderArticles(articles) {
+    const container = document.getElementById('articleListContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    if (!articles || articles.length === 0) {
+        container.innerHTML = '<div class="loading-state">目前資料庫無文章，請先點擊「匯入文章」分頁貼入文章！</div>';
+        return;
+    }
+    
+    articles.forEach(art => {
+        const card = document.createElement('div');
+        card.className = 'card glass article-card';
+        
+        const dateStr = new Date(art.createdAt).toLocaleDateString('zh-TW', {
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+        });
+        
+        card.innerHTML = `
+            <h3>${escapeHtml(art.title)}</h3>
+            <div class="article-meta-info">
+                <span>📅 儲存時間: ${dateStr}</span>
+                <span>📏 總字數: ${art.wordCount} 字 | 🧩 段落數: ${art.paragraphCount} 個</span>
+            </div>
+            <div class="article-tags-names">
+                ${(art.names || []).map(name => `<span class="name-tag">👤 ${escapeHtml(name)}</span>`).join('')}
+            </div>
+            <button class="article-delete-btn" title="刪除文章">🗑️</button>
+        `;
+        
+        // Delete button logic
+        const deleteBtn = card.querySelector('.article-delete-btn');
+        deleteBtn.onclick = async (e) => {
+            e.stopPropagation();
+            if (confirm(`確定要刪除文章「${art.title}」及其所有段落記錄嗎？`)) {
+                try {
+                    const res = await fetch(`/api/articles/${art.id}`, { method: 'DELETE' });
+                    const resData = await res.json();
+                    if (resData.success) {
+                        fetchArticles();
+                    } else {
+                        alert('刪除失敗');
+                    }
+                } catch (err) {
+                    alert('刪除時發生錯誤');
+                }
+            }
+        };
+
+        // Click to view detail modal
+        card.onclick = () => {
+            openArticleDetails(art.id);
+        };
+        
+        container.appendChild(card);
+    });
+}
+
+async function openArticleDetails(articleId) {
+    try {
+        const response = await fetch(`/api/articles/${articleId}`);
+        const data = await response.json();
+        
+        const { article, paragraphs } = data;
+        
+        // Create full detail layout
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'articleDetailModal';
+        
+        const modalContent = document.createElement('div');
+        modalContent.className = 'modal-content glass';
+        modalContent.style.cssText = 'width: 90%; max-width: 900px; height: 85vh; padding: 30px;';
+        
+        const formattedDate = new Date(article.createdAt).toLocaleDateString('zh-TW');
+        
+        modalContent.innerHTML = `
+            <div class="modal-controls" style="position: absolute; top: 20px; right: 20px;">
+                <span class="close-btn" id="closeDetailBtn">&times;</span>
+            </div>
+            <div style="width: 100%; display: flex; flex-direction: column; height: 100%; overflow: hidden;">
+                <h2 style="margin-bottom: 5px; font-weight: 600;">${escapeHtml(article.title)}</h2>
+                <div style="color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px;">
+                    儲存日期: ${formattedDate} | 人物: ${(article.names || []).join('、') || '無'}
+                </div>
+                
+                <div class="preview-layout" style="flex: 1; min-height: 0; margin-top: 10px;">
+                    <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
+                        <h3 style="margin-bottom: 10px;">重新排版內容</h3>
+                        <div class="reformatted-content-view" style="flex: 1; max-height: none;">
+                            ${renderMarkdown(article.reformatted)}
+                        </div>
+                    </div>
+                    <div class="preview-column" style="display: flex; flex-direction: column; height: 100%;">
+                        <h3 style="margin-bottom: 10px;">段落細節紀錄 (${paragraphs.length})</h3>
+                        <div class="paragraphs-list-view" style="flex: 1; max-height: none;">
+                            ${paragraphs.map((p, i) => `
+                                <div class="paragraph-analysis-card">
+                                    <div class="paragraph-analysis-header">
+                                        <span>段落 #${i+1}</span>
+                                        <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
+                                    </div>
+                                    <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-dim);">
+                                        👤 人物: ${(p.names || []).join('、') || '無'}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        modal.appendChild(modalContent);
+        document.body.appendChild(modal);
+        
+        // Close modal handlers
+        const closeBtn = modalContent.querySelector('#closeDetailBtn');
+        const closeModal = () => {
+            modal.remove();
+        };
+        
+        closeBtn.onclick = closeModal;
+        modal.onclick = (e) => {
+            if (e.target === modal) closeModal();
+        };
+        
+    } catch (err) {
+        alert('載入文章詳情失敗: ' + err.message);
+    }
+}
+
+// ─── Article Import Logic ───
+const libImportTextarea = document.getElementById('libImportTextarea');
+const libReformatBtn = document.getElementById('libReformatBtn');
+const libImportStatus = document.getElementById('libImportStatus');
+const libImportPreview = document.getElementById('libImportPreview');
+const libPreviewTitle = document.getElementById('libPreviewTitle');
+const libPreviewBody = document.getElementById('libPreviewBody');
+const libPreviewParagraphs = document.getElementById('libPreviewParagraphs');
+const libSaveBtn = document.getElementById('libSaveBtn');
+
+if (libReformatBtn) {
+    libReformatBtn.onclick = async () => {
+        const content = libImportTextarea.value.trim();
+        if (!content) {
+            alert('請貼入文章內容');
+            return;
+        }
+
+        libReformatBtn.disabled = true;
+        libImportStatus.innerText = '正在呼叫 AI 進行文章分析與排版，請稍後... ⏳';
+        libImportStatus.className = 'status-msg info';
+        libImportPreview.classList.add('hidden');
+        reformatData = null;
+
+        try {
+            const res = await fetch('/api/articles/reformat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            const data = await res.json();
+            
+            if (data.error) {
+                libImportStatus.innerText = '分析失敗: ' + data.error;
+                libImportStatus.className = 'status-msg status-error';
+            } else {
+                reformatData = data;
+                reformatData.originalContent = content; // cache original
+                
+                libPreviewTitle.value = data.title || '';
+                libPreviewBody.innerHTML = renderMarkdown(data.reformatted || '');
+                
+                libPreviewParagraphs.innerHTML = data.paragraphs.map((p, i) => `
+                    <div class="paragraph-analysis-card">
+                        <div class="paragraph-analysis-header">
+                            <span>段落 #${i+1}</span>
+                            <span class="role-badge role-${getRoleClass(p.role)}">${p.role}</span>
+                        </div>
+                        <div class="paragraph-content-text">${escapeHtml(p.content)}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-dim);">
+                            👤 人物: ${(p.names || []).join('、') || '無'}
+                        </div>
+                    </div>
+                `).join('');
+                
+                libImportPreview.classList.remove('hidden');
+                libImportStatus.innerText = '文章分析完成！請檢視下方排版與段落切分，確認無誤後點擊「儲存文章」';
+                libImportStatus.className = 'status-msg status-success';
+            }
+        } catch (err) {
+            libImportStatus.innerText = '與伺服器連線失敗: ' + err.message;
+            libImportStatus.className = 'status-msg status-error';
+        } finally {
+            libReformatBtn.disabled = false;
+        }
+    };
+}
+
+if (libSaveBtn) {
+    libSaveBtn.onclick = async () => {
+        if (!reformatData) return;
+        
+        libSaveBtn.disabled = true;
+        libImportStatus.innerText = '正在儲存至資料庫... 💾';
+        libImportStatus.className = 'status-msg info';
+
+        try {
+            const res = await fetch('/api/articles/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: libPreviewTitle.value.trim() || reformatData.title,
+                    originalContent: reformatData.originalContent,
+                    reformatted: reformatData.reformatted,
+                    paragraphs: reformatData.paragraphs
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                libImportStatus.innerText = `文章「${data.title}」已成功儲存！`;
+                libImportStatus.className = 'status-msg status-success';
+                libImportTextarea.value = '';
+                libImportPreview.classList.add('hidden');
+                reformatData = null;
+            } else {
+                libImportStatus.innerText = '儲存失敗';
+                libImportStatus.className = 'status-msg status-error';
+            }
+        } catch (err) {
+            libImportStatus.innerText = '儲存時連線錯誤';
+            libImportStatus.className = 'status-msg status-error';
+        } finally {
+            libSaveBtn.disabled = false;
+        }
+    };
+}
+
+// ─── Article Generator Logic ───
+const libGenWordCount = document.getElementById('libGenWordCount');
+const libGenNamesContainer = document.getElementById('libGenNamesContainer');
+const libGenerateBtn = document.getElementById('libGenerateBtn');
+const libGenStatus = document.getElementById('libGenStatus');
+const libGenResult = document.getElementById('libGenResult');
+const libGenResultBody = document.getElementById('libGenResultBody');
+const libGenCopyBtn = document.getElementById('libGenCopyBtn');
+
+async function loadUniqueNames() {
+    if (!libGenNamesContainer) return;
+    libGenNamesContainer.innerHTML = '<p style="color: var(--text-dim);">讀取人名中...</p>';
+    
+    try {
+        const res = await fetch('/api/articles/names');
+        const data = await res.json();
+        
+        if (!data.names || data.names.length === 0) {
+            libGenNamesContainer.innerHTML = '<p style="color: var(--text-dim); font-style: italic;">資料庫中尚無儲存的文章或人名紀錄</p>';
+            return;
+        }
+        
+        libGenNamesContainer.innerHTML = data.names.map(name => `
+            <div class="name-replace-item">
+                <label>👤 原名: <strong>${escapeHtml(name)}</strong></label>
+                <input type="text" class="name-replace-input" data-original-name="${escapeHtml(name)}" placeholder="新名字...">
+            </div>
+        `).join('');
+    } catch (e) {
+        libGenNamesContainer.innerHTML = '<p style="color: var(--text-error);">無法讀取人名清單</p>';
+    }
+}
+
+if (libGenerateBtn) {
+    libGenerateBtn.onclick = async () => {
+        libGenerateBtn.disabled = true;
+        libGenStatus.innerText = '段落隨機重組中，並呼叫 Gemini 撰寫銜接過渡句... ✍️';
+        libGenStatus.className = 'status-msg info';
+        libGenResult.classList.add('hidden');
+
+        // Extract name replacements
+        const replacements = {};
+        const inputs = document.querySelectorAll('.name-replace-input');
+        inputs.forEach(input => {
+            const oldName = input.dataset.originalName;
+            const newName = input.value.trim();
+            if (newName) {
+                replacements[oldName] = newName;
+            }
+        });
+
+        const targetWordCount = libGenWordCount ? libGenWordCount.value : 500;
+
+        try {
+            const res = await fetch('/api/articles/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targetWordCount,
+                    nameReplacements: replacements
+                })
+            });
+            const data = await res.json();
+            
+            if (data.error) {
+                libGenStatus.innerText = '生成失敗: ' + data.error;
+                libGenStatus.className = 'status-msg status-error';
+            } else {
+                libGenResultBody.innerHTML = renderMarkdown(data.article);
+                libGenResult.classList.remove('hidden');
+                
+                libGenStatus.innerText = '文章生成完成！已符合起承轉合結構，並已完成人名替换與過渡句補寫。';
+                libGenStatus.className = 'status-msg status-success';
+                
+                // Set text content for copy action
+                libGenCopyBtn.onclick = () => {
+                    navigator.clipboard.writeText(data.article)
+                        .then(() => alert('已複製生成的文章！'))
+                        .catch(() => alert('複製失敗'));
+                };
+            }
+        } catch (err) {
+            libGenStatus.innerText = '與伺服器連線失敗';
+            libGenStatus.className = 'status-msg status-error';
+        } finally {
+            libGenerateBtn.disabled = false;
+        }
+    };
+}
+
+// ─── Helpers ───
+function getRoleClass(role) {
+    if (role === '起') return 'qi';
+    if (role === '承') return 'cheng';
+    if (role === '轉') return 'zhuan';
+    if (role === '合') return 'he';
+    return 'cheng';
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#039;");
+}
+
+function renderMarkdown(md) {
+    if (!md) return '';
+    
+    // We escape HTML first to prevent XSS, but we want our parsed HTML tags to work
+    let escaped = escapeHtml(md);
+    
+    // Headers
+    escaped = escaped.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    escaped = escaped.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    escaped = escaped.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    
+    // Bold
+    escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Paragraphs
+    const lines = escaped.split('\n\n');
+    const processed = lines.map(line => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('&lt;h') || trimmed.startsWith('<h') || trimmed.startsWith('&lt;hr') || trimmed.startsWith('<hr')) {
+            // Restore headers and horizontal rules
+            return trimmed.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        }
+        if (trimmed) {
+            return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+        }
+        return '';
+    });
+    
+    return processed.join('\n');
 }

@@ -20,6 +20,7 @@
         <nav class="tabs">
             <button class="tab-btn active" data-tab="downloader">下載器</button>
             <button class="tab-btn" data-tab="history">內存庫 (已下載)</button>
+            <button class="tab-btn" data-tab="library">文章圖書館</button>
             <button class="tab-btn" data-tab="settings">設定</button>
         </nav>
 
@@ -63,6 +64,109 @@
                 <div id="historyGrid" class="media-grid"></div>
             </section>
 
+            <section id="libraryTab" class="tab-content hidden">
+                <div class="library-nav">
+                    <button class="sub-tab-btn active" data-sub-tab="list">文章庫列表</button>
+                    <button class="sub-tab-btn" data-sub-tab="import">匯入文章</button>
+                    <button class="sub-tab-btn" data-sub-tab="generator">重組生成器</button>
+                </div>
+
+                <!-- 1. 文章庫列表面板 -->
+                <div id="libListPanel" class="sub-tab-content">
+                    <div class="history-header">
+                        <h2>已儲存的文章</h2>
+                        <button id="refreshLibrary" class="icon-btn secondary-btn">🔄 重新整理</button>
+                    </div>
+                    <div id="articleListContainer" class="article-grid">
+                        <div class="loading-state">載入中...</div>
+                    </div>
+                </div>
+
+                <!-- 2. 匯入文章面板 -->
+                <div id="libImportPanel" class="sub-tab-content hidden">
+                    <div class="card glass">
+                        <h2>匯入新文章</h2>
+                        <p style="color: var(--text-dim); margin-bottom: 20px;">
+                            貼上您的文章內容，系統將利用 AI 進行優雅的排版、切割段落與人名提取。
+                        </p>
+                        <div class="form-group">
+                            <label for="libImportTextarea">文章內容</label>
+                            <textarea id="libImportTextarea" placeholder="在此貼上文章內容..." rows="12"></textarea>
+                        </div>
+                        <button id="libReformatBtn" class="primary-btn">重新排版與分析</button>
+                        
+                        <div id="libImportStatus" class="status-msg"></div>
+                    </div>
+
+                    <!-- 預覽與分析結果 -->
+                    <div id="libImportPreview" class="card glass hidden">
+                        <h2>排版預覽與分析結果</h2>
+                        
+                        <div class="form-group" style="margin-top: 20px;">
+                            <label for="libPreviewTitle">文章標題</label>
+                            <input type="text" id="libPreviewTitle" placeholder="文章標題">
+                        </div>
+
+                        <div class="preview-layout">
+                            <div class="preview-column">
+                                <h3>排版後全文</h3>
+                                <div id="libPreviewBody" class="reformatted-content-view"></div>
+                            </div>
+                            <div class="preview-column">
+                                <h3>段落結構分析 (起承轉合) & 人名</h3>
+                                <div id="libPreviewParagraphs" class="paragraphs-list-view"></div>
+                            </div>
+                        </div>
+
+                        <div class="action-bar" style="margin-top: 30px;">
+                            <button id="libSaveBtn" class="primary-btn" style="background: linear-gradient(135deg, #10b981, #059669);">儲存文章至庫</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 重組生成器面板 -->
+                <div id="libGeneratorPanel" class="sub-tab-content hidden">
+                    <div class="card glass">
+                        <h2>文章重組生成器</h2>
+                        <p style="color: var(--text-dim); margin-bottom: 20px;">
+                            利用資料庫中儲存的段落，隨機挑選「起、承、轉、合」角色段落進行拼裝，並藉由 Gemini 補寫段落銜接與過渡句。
+                        </p>
+
+                        <div class="form-group">
+                            <label for="libGenWordCount">目標總字數 (約略)</label>
+                            <select id="libGenWordCount" class="custom-select">
+                                <option value="300">300 字 (極短篇)</option>
+                                <option value="500" selected>500 字 (短篇故事)</option>
+                                <option value="800">800 字 (中篇故事)</option>
+                                <option value="1200">1200 字 (完整故事)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>人名替換對照表 (留空則不更換)</label>
+                            <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: -5px; margin-bottom: 10px;">
+                                系統已自動掃描資料庫中出現過的人名。您可以在右側填入希望取代的新名字。
+                            </p>
+                            <div id="libGenNamesContainer" class="names-replace-grid">
+                                <p style="color: var(--text-dim); font-style: italic;">資料庫中無人名記錄</p>
+                            </div>
+                        </div>
+
+                        <button id="libGenerateBtn" class="primary-btn">隨機重組並生成文章</button>
+                        <div id="libGenStatus" class="status-msg"></div>
+                    </div>
+
+                    <!-- 生成結果顯示 -->
+                    <div id="libGenResult" class="card glass hidden">
+                        <div class="results-header">
+                            <h2>重組生成文章結果</h2>
+                            <button id="libGenCopyBtn" class="icon-btn secondary-btn">📋 複製內容</button>
+                        </div>
+                        <div id="libGenResultBody" class="reformatted-content-view" style="margin-top: 20px;"></div>
+                    </div>
+                </div>
+            </section>
+
             <section id="settingsTab" class="tab-content hidden">
                 <div class="card glass">
                     <h2>系統設定</h2>
@@ -71,8 +175,24 @@
                     </p>
                     <div class="form-group">
                         <label for="cookieInput">Tumblr Cookies</label>
-                        <textarea id="cookieInput" placeholder="例如: blog_auth=...; pfu=...;" rows="5"></textarea>
+                        <textarea id="cookieInput" placeholder="例如: blog_auth=...; pfu=...;" rows="4"></textarea>
                     </div>
+                    
+                    <hr style="border-color: var(--glass-border); margin: 25px 0;">
+                    
+                    <h2>Gemini AI 設定</h2>
+                    <p style="color: var(--text-dim); margin-bottom: 20px;">
+                        文章圖書館功能需要使用 Gemini API。請在此輸入您的 API 金鑰。
+                    </p>
+                    <div class="form-group">
+                        <label for="geminiApiKeyInput">Gemini API 金鑰 (API Key)</label>
+                        <input type="text" id="geminiApiKeyInput" placeholder="AIzaSy..." autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="geminiModelInput">Gemini 模型 (Model)</label>
+                        <input type="text" id="geminiModelInput" placeholder="gemini-3.1-flash-lite" value="gemini-3.1-flash-lite">
+                    </div>
+                    
                     <button id="saveSettingsBtn" class="primary-btn">儲存設定</button>
                 </div>
             </section>
