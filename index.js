@@ -270,19 +270,25 @@ app.post('/api/fetch', async (req, res) => {
 
             const response = await axios.get(fetchUrl, { headers });
             const finalUrl = response.request.res.responseUrl || fetchUrl;
+            const html = response.data;
+            const $ = cheerio.load(html);
             
-            // Detect redirection to login pages, safe-mode, consent, or main landing page which serve dummy background videos
+            // Detect redirection or in-place rendering of login wall, safe-mode, consent page, or landing page which serve dummy background videos
             const finalUrlObj = new URL(finalUrl);
-            if (finalUrlObj.pathname === '/' || 
+            const isLoginWall = 
+                finalUrlObj.pathname === '/' || 
                 finalUrlObj.pathname.includes('/login') || 
                 finalUrlObj.pathname.includes('/safe-mode') || 
                 finalUrlObj.pathname.includes('/privacy/consent') ||
-                (finalUrlObj.hostname === 'www.tumblr.com' && finalUrlObj.pathname === '/')) {
+                (finalUrlObj.hostname === 'www.tumblr.com' && finalUrlObj.pathname === '/') ||
+                html.includes('login-wall') ||
+                html.includes('login_wall') ||
+                $('title').text() === 'Tumblr' ||
+                $('title').text() === '註冊 - 登入';
+
+            if (isLoginWall) {
                 throw new Error('該文章需要登入資訊方可存取。請至系統設定中填寫 Tumblr Cookies。');
             }
-
-            const html = response.data;
-            const $ = cheerio.load(html);
 
             // Tags
             $('meta[property="article:tag"]').each((i, el) => {
