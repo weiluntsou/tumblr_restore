@@ -90,26 +90,33 @@ function parseCookies(cookieData) {
  * Extracts blog name and post ID from various Tumblr URL formats
  */
 function parseTumblrUrl(urlStr) {
-    const url = new URL(urlStr);
-    
-    // Format: https://www.tumblr.com/blogname/postid
-    const wwwMatch = url.pathname.match(/^\/([^/]+)\/(\d+)/);
-    if (url.hostname === 'www.tumblr.com' && wwwMatch) {
-        return { blogName: wwwMatch[1], postId: wwwMatch[2] };
-    }
-    
-    // Format: https://blogname.tumblr.com/post/postid
-    const subdomainMatch = url.hostname.match(/^([^.]+)\.tumblr\.com$/);
-    const postMatch = url.pathname.match(/\/post\/(\d+)/);
-    if (subdomainMatch && postMatch) {
-        return { blogName: subdomainMatch[1], postId: postMatch[1] };
-    }
-    
-    // Fallback: just try to get something
-    if (subdomainMatch) {
-        return { blogName: subdomainMatch[1], postId: null };
-    }
-    
+    try {
+        const url = new URL(urlStr);
+        
+        // Format: https://www.tumblr.com/blog/view/blogname/postid
+        const viewMatch = url.pathname.match(/^\/blog\/view\/([^/]+)\/(\d+)/);
+        if (viewMatch) {
+            return { blogName: viewMatch[1], postId: viewMatch[2] };
+        }
+        
+        // Format: https://www.tumblr.com/blogname/postid
+        const wwwMatch = url.pathname.match(/^\/([^/]+)\/(\d+)/);
+        if ((url.hostname === 'www.tumblr.com' || url.hostname === 'tumblr.com') && wwwMatch) {
+            return { blogName: wwwMatch[1], postId: wwwMatch[2] };
+        }
+        
+        // Format: https://blogname.tumblr.com/post/postid
+        const subdomainMatch = url.hostname.match(/^([^.]+)\.tumblr\.com$/);
+        const postMatch = url.pathname.match(/\/post\/(\d+)/);
+        if (subdomainMatch && postMatch) {
+            return { blogName: subdomainMatch[1], postId: postMatch[1] };
+        }
+        
+        // Fallback: just try to get something
+        if (subdomainMatch) {
+            return { blogName: subdomainMatch[1], postId: null };
+        }
+    } catch (e) {}
     return null;
 }
 
@@ -187,7 +194,17 @@ app.post('/api/fetch', async (req, res) => {
                                 media.push({ type: 'image', url: best.url });
                             }
                         } else if (block.type === 'video') {
-                            const videoUrl = block.url || block.media?.url;
+                            let videoUrl = block.url;
+                            if (!videoUrl && block.media) {
+                                if (Array.isArray(block.media) && block.media.length > 0) {
+                                    const best = block.media.reduce((a, b) => 
+                                        ((a.width || 0) * (a.height || 0)) > ((b.width || 0) * (b.height || 0)) ? a : b
+                                    );
+                                    videoUrl = best.url;
+                                } else if (block.media.url) {
+                                    videoUrl = block.media.url;
+                                }
+                            }
                             if (videoUrl && !media.find(m => m.url === videoUrl)) {
                                 media.push({ type: 'video', url: videoUrl });
                             }
@@ -211,7 +228,17 @@ app.post('/api/fetch', async (req, res) => {
                                     media.push({ type: 'image', url: best.url });
                                 }
                             } else if (block.type === 'video') {
-                                const videoUrl = block.url || block.media?.url;
+                                let videoUrl = block.url;
+                                if (!videoUrl && block.media) {
+                                    if (Array.isArray(block.media) && block.media.length > 0) {
+                                        const best = block.media.reduce((a, b) => 
+                                            ((a.width || 0) * (a.height || 0)) > ((b.width || 0) * (b.height || 0)) ? a : b
+                                        );
+                                        videoUrl = best.url;
+                                    } else if (block.media.url) {
+                                        videoUrl = block.media.url;
+                                    }
+                                }
                                 if (videoUrl && !media.find(m => m.url === videoUrl)) {
                                     media.push({ type: 'video', url: videoUrl });
                                 }
@@ -235,13 +262,25 @@ app.post('/api/fetch', async (req, res) => {
             };
             if (cookieStr) headers['Cookie'] = cookieStr;
 
-            // Try the subdomain URL format (often returns more content)
+            // Use the standard www.tumblr.com format first to avoid connection hang ups and login redirects
             let fetchUrl = url;
-            if (parsed) {
-                fetchUrl = `https://${parsed.blogName}.tumblr.com/post/${parsed.postId}`;
+            if (parsed && parsed.postId) {
+                fetchUrl = `https://www.tumblr.com/${parsed.blogName}/${parsed.postId}`;
             }
 
             const response = await axios.get(fetchUrl, { headers });
+            const finalUrl = response.request.res.responseUrl || fetchUrl;
+            
+            // Detect redirection to login pages, safe-mode, consent, or main landing page which serve dummy background videos
+            const finalUrlObj = new URL(finalUrl);
+            if (finalUrlObj.pathname === '/' || 
+                finalUrlObj.pathname.includes('/login') || 
+                finalUrlObj.pathname.includes('/safe-mode') || 
+                finalUrlObj.pathname.includes('/privacy/consent') ||
+                (finalUrlObj.hostname === 'www.tumblr.com' && finalUrlObj.pathname === '/')) {
+                throw new Error('該文章需要登入資訊方可存取。請至系統設定中填寫 Tumblr Cookies。');
+            }
+
             const html = response.data;
             const $ = cheerio.load(html);
 
@@ -261,13 +300,46 @@ app.post('/api/fetch', async (req, res) => {
                 if (content && !media.find(m => m.url === content)) media.push({ type: 'video', url: content });
             });
 
-            // Tumblr video URLs in raw HTML
-            const videoPattern = /https:\/\/v[a-z0-9]+\.video\.tumblr\.com\/[^\s"'<>]+\.mp4/g;
+            // General video URL pattern supporting all modern media/video Tumblr subdomains
+            const videoPattern = /https:\/\/[a-z0-9-]+\.(?:video|media)\.tumblr\.com\/[^\s"'<>]+\.mp4/g;
             const foundVideos = html.match(videoPattern);
             if (foundVideos) {
                 foundVideos.forEach(vUrl => {
                     if (!media.find(m => m.url === vUrl)) media.push({ type: 'video', url: vUrl });
                 });
+            }
+
+            // Scrape video player iframes to extract direct mp4 URLs
+            const iframeUrls = [];
+            $('iframe').each((i, el) => {
+                const src = $(el).attr('src');
+                if (src && (src.includes('tumblr.com/video/') || src.includes('tumblr.com/assets/video/'))) {
+                    iframeUrls.push(src);
+                }
+            });
+
+            for (const iframeUrl of iframeUrls) {
+                try {
+                    const iframeRes = await axios.get(iframeUrl, { headers });
+                    const iframeHtml = iframeRes.data;
+                    const $iframe = cheerio.load(iframeHtml);
+                    
+                    $iframe('video source, video').each((i, el) => {
+                        const src = $iframe(el).attr('src') || $iframe(el).find('source').attr('src');
+                        if (src && !media.find(m => m.url === src) && !src.startsWith('blob:')) {
+                            media.push({ type: 'video', url: src });
+                        }
+                    });
+                    
+                    const iframeVideos = iframeHtml.match(videoPattern);
+                    if (iframeVideos) {
+                        iframeVideos.forEach(vUrl => {
+                            if (!media.find(m => m.url === vUrl)) media.push({ type: 'video', url: vUrl });
+                        });
+                    }
+                } catch (err) {
+                    console.warn(`Failed to scrape iframe ${iframeUrl}:`, err.message);
+                }
             }
 
             // Images in post body
